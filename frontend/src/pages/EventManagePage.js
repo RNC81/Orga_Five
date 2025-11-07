@@ -3,7 +3,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getEvent, getPlayers, updateEvent, generateTeams } from '../services/api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import {
   Table,
@@ -14,24 +13,21 @@ import {
   TableRow,
 } from '../components/ui/table';
 import { toast } from 'sonner';
-import { ArrowLeft, UserPlus, UserMinus, Star, Shuffle, Save, AlertTriangle } from 'lucide-react';
-import { Badge } from '../components/ui/badge'; // Nous en aurons besoin
+import { ArrowLeft, UserPlus, UserMinus, Star, Shuffle, AlertTriangle } from 'lucide-react';
+import { Badge } from '../components/ui/badge';
 
 export default function EventManagePage() {
-  const { id: eventId } = useParams(); // Récupère l'ID du match depuis l'URL
+  const { id: eventId } = useParams();
   const navigate = useNavigate();
 
   const [event, setEvent] = useState(null);
   const [allPlayers, setAllPlayers] = useState([]);
-  
-  // un "Map" est plus efficace pour gérer les joueurs présents et leur note
-  const [presentPlayersMap, setPresentPlayersMap] = useState(new Map()); 
-  
+  const [presentPlayersMap, setPresentPlayersMap] = useState(new Map());
   const [generatedTeams, setGeneratedTeams] = useState([]);
   const [warningMessage, setWarningMessage] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // 1. Charger toutes les données au démarrage
+  // 1. Charger toutes les données
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -44,17 +40,25 @@ export default function EventManagePage() {
         setEvent(eventRes.data);
         setAllPlayers(playersRes.data);
         
-        // Pré-remplir la map des joueurs présents avec leurs notes temporaires
         const initialMap = new Map();
         eventRes.data.joueurs_presents.forEach(p => {
           initialMap.set(p.joueur_id, p.note_temporaire);
         });
         setPresentPlayersMap(initialMap);
         
-        // Si des équipes ont déjà été générées, les afficher
         if (eventRes.data.equipes_generees && eventRes.data.equipes_generees.length > 0) {
-          // (Nous allons reconstruire l'affichage des équipes)
-          fetchAndDisplayTeams(eventRes.data);
+          // Si des équipes existent, on doit les reconstruire car elles ne sont pas
+          // stockées avec les détails des joueurs, seulement les IDs.
+          // On appelle generateTeams() qui lit les équipes sauvegardées si elles existent.
+          // (Correction: on va appeler une fonction qui reconstruit les stats)
+          
+          // Pour l'instant, on se concentre sur la génération
+          // On va juste stocker les équipes générées du backend
+          if (eventRes.data.equipes_generees.length > 0) {
+            // On doit reconstruire les données des équipes
+            rebuildTeamData(eventRes.data.equipes_generees, playersRes.data, initialMap);
+            setWarningMessage(eventRes.data.warning_message);
+          }
         }
         
       } catch (error) {
@@ -66,6 +70,30 @@ export default function EventManagePage() {
     };
     loadData();
   }, [eventId, navigate]);
+  
+  // Helper pour reconstruire les données des équipes
+  const rebuildTeamData = (teamIdsList, allPlayersData, notesMap) => {
+    const teams = teamIdsList.map(teamIds => {
+      const teamPlayers = teamIds.map(id => {
+        const player = allPlayersData.find(p => p.id === id);
+        return {
+          ...player,
+          note: notesMap.get(id) || player.note_generale, // Affiche la note temporaire
+        };
+      });
+      
+      const teamNotes = teamPlayers.map(p => p.note);
+      const avgNote = teamNotes.reduce((a, b) => a + b, 0) / teamNotes.length;
+      
+      return {
+        joueurs: teamPlayers,
+        note_moyenne: avgNote.toFixed(1)
+        // (On ne reconstruit pas les postes pour l'instant)
+      };
+    });
+    setGeneratedTeams(teams);
+  };
+
 
   // 2. Logique pour séparer les listes de joueurs
   const { presentPlayers, availablePlayers } = useMemo(() => {
@@ -74,12 +102,13 @@ export default function EventManagePage() {
     return { presentPlayers: present, availablePlayers: available };
   }, [allPlayers, presentPlayersMap]);
 
-  // 3. Actions sur les joueurs
+  // 3. Actions sur les joueurs (MODIFIÉ)
   const addPlayer = (player) => {
     const newMap = new Map(presentPlayersMap);
-    newMap.set(player.id, player.note_de_base); // Ajoute avec sa note de base
+    // On ajoute avec sa NOTE GÉNÉRALE calculée
+    newMap.set(player.id, player.note_generale); 
     setPresentPlayersMap(newMap);
-    setGeneratedTeams([]); // Si on change les joueurs, on cache les anciennes équipes
+    setGeneratedTeams([]); 
   };
 
   const removePlayer = (playerId) => {
@@ -94,8 +123,10 @@ export default function EventManagePage() {
     const parsedNote = parseFloat(note) || 0;
     if (parsedNote >= 1 && parsedNote <= 10) {
       newMap.set(playerId, parsedNote);
-      setPresentPlayersMap(newMap);
+    } else {
+      newMap.set(playerId, 0); // Permet de vider le champ
     }
+    setPresentPlayersMap(newMap);
     setGeneratedTeams([]);
   };
 
@@ -103,16 +134,15 @@ export default function EventManagePage() {
   const handleSaveAndGenerate = async () => {
     setLoading(true);
     try {
-      // Étape A: Mettre à jour l'événement avec la liste des présents et leurs notes
+      // Étape A: Mettre à jour l'événement
       const joueurs_presents_data = Array.from(presentPlayersMap.entries()).map(([id, note]) => ({
         joueur_id: id,
-        note_temporaire: note,
+        note_temporaire: note, // C'est cette note qui sera utilisée pour l'équilibrage
       }));
       
       await updateEvent(eventId, {
         joueurs_presents: joueurs_presents_data,
-        // (On ne gère pas encore les contraintes, ce sera l'étape 11)
-        contraintes_affinite: [] 
+        contraintes_affinite: [] // (On gère pas encore)
       });
       toast.success('Liste des présents sauvegardée ! Lancement de la génération...');
       
@@ -134,12 +164,6 @@ export default function EventManagePage() {
     }
   };
   
-  // 5. Helper pour afficher les équipes
-  const fetchAndDisplayTeams = (eventData) => {
-    // Cette fonction sera utilisée plus tard pour afficher les équipes déjà générées
-    // Pour l'instant, on se concentre sur la génération
-  };
-
   if (loading && !event) {
     return <div className="min-h-screen flex items-center justify-center">Chargement du match...</div>;
   }
@@ -161,10 +185,9 @@ export default function EventManagePage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* (On ajoutera un bouton Sauvegarder plus tard) */}
-            <Button size="lg" onClick={handleSaveAndGenerate} disabled={loading}>
+            <Button size="lg" onClick={handleSaveAndGenerate} disabled={loading || presentPlayers.length === 0}>
               <Shuffle className="w-5 h-5 mr-2" />
-              Sauvegarder et Générer les Équipes
+              {loading ? "Génération..." : "Sauvegarder et Générer les Équipes"}
             </Button>
           </div>
         </div>
@@ -179,7 +202,7 @@ export default function EventManagePage() {
           <Card>
             <CardHeader>
               <CardTitle>Joueurs Présents ({presentPlayers.length})</CardTitle>
-              <CardDescription>Ajustez la note temporaire si un joueur est blessé ou en retour de vacances.</CardDescription>
+              <CardDescription>Ajustez la note "Générale" si besoin pour ce match.</CardDescription>
             </CardHeader>
             <CardContent>
               <PlayerTable
@@ -227,14 +250,14 @@ export default function EventManagePage() {
                   Cliquez sur "Générer les Équipes" une fois vos joueurs présents sélectionnés.
                 </p>
               ) : (
-                <div className="grid gap-6" style={{ gridTemplateColumns: `repeat(${generatedTeams.length}, 1fr)` }}>
+                <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${generatedTeams.length > 3 ? 3 : generatedTeams.length}, 1fr)` }}>
                   {generatedTeams.map((team, index) => (
-                    <div key={index} className="p-4 bg-gray-50 rounded-lg">
+                    <div key={index} className="p-3 bg-gray-50 rounded-lg border">
                       <h4 className="font-bold text-lg mb-2">Équipe {index + 1}</h4>
-                      <p className="text-sm text-gray-600 font-medium mb-1">
-                        Note Moyenne: <span className="text-blue-600">{team.note_moyenne}</span>
+                      <p className="text-sm text-gray-600 font-medium mb-3">
+                        Note Moyenne: <span className="text-blue-600 font-bold">{team.note_moyenne}</span>
                       </p>
-                      <ul className="space-y-2 mt-3">
+                      <ul className="space-y-2">
                         {team.joueurs.map((player) => (
                           <li key={player.id} className="text-sm p-2 bg-white rounded shadow-sm flex justify-between items-center">
                             <span>{player.nom}</span>
@@ -255,7 +278,7 @@ export default function EventManagePage() {
   );
 }
 
-// Composant réutilisable pour les listes de joueurs
+// Composant réutilisable pour les listes de joueurs (MODIFIÉ)
 function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }) {
   return (
     <div className="max-h-96 overflow-y-auto border rounded-lg">
@@ -263,7 +286,7 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
         <TableHeader>
           <TableRow>
             <TableHead>Nom</TableHead>
-            <TableHead>Note</TableHead>
+            <TableHead>Général</TableHead>
             {onNoteChange && <TableHead>Note (Temp.)</TableHead>}
             <TableHead className="text-right">Action</TableHead>
           </TableRow>
@@ -280,9 +303,9 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
               <TableRow key={player.id}>
                 <TableCell className="font-medium">{player.nom}</TableCell>
                 <TableCell>
-                  <div className="flex items-center gap-1">
-                    <Star className="w-4 h-4 text-gray-300" />
-                    {player.note_de_base}
+                  <div className="flex items-center gap-1 font-bold">
+                    <Star className="w-4 h-4 text-yellow-400" />
+                    {player.note_generale} {/* Affiche le "Général" */}
                   </div>
                 </TableCell>
                 {onNoteChange && (
@@ -293,7 +316,9 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
                       max="10"
                       step="0.5"
                       className="w-20 h-8"
+                      // Affiche la note temporaire, ou le général si pas encore modifié
                       value={notes.get(player.id) || ''}
+                      placeholder={String(player.note_generale)}
                       onChange={(e) => onNoteChange(player.id, e.target.value)}
                     />
                   </TableCell>

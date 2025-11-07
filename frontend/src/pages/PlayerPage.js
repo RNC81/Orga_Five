@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getPlayers, createPlayer, updatePlayer, deletePlayer } from '../services/api';
 import { Button } from '../components/ui/button';
@@ -22,21 +22,57 @@ import {
   DialogFooter,
   DialogClose,
 } from '../components/ui/dialog';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '../components/ui/tooltip'; // Importation de l'infobulle
 import { toast } from 'sonner';
-import { Plus, Trash2, Edit, ArrowLeft, User, Star } from 'lucide-react';
+import { Plus, Trash2, Edit, ArrowLeft, User, Star, HelpCircle } from 'lucide-react';
+
+// État initial pour un nouveau joueur
+const emptyPlayerState = {
+  nom: '',
+  postes: '', // On gère comme une string
+  vitesse: 5,
+  technique: 5,
+  tir: 5,
+  passe: 5,
+  defense: 5,
+  physique: 5,
+  reflexes_gk: 1,
+  plongeon_gk: 1,
+  jeu_au_pied_gk: 1,
+};
+
+// Descriptions pour les infobulles
+const attributeDescriptions = {
+  vitesse: "Explosivité et accélération sur les 3-5 premiers mètres.",
+  technique: "Dribble, contrôle de balle dans les petits espaces et 1v1.",
+  tir: "Précision de la frappe, finition (pointu, plat du pied) et puissance.",
+  passe: "Qualité des passes (précision, force) et vision du jeu.",
+  defense: "Positionnement, anticipation, tacles propres et duels 1v1.",
+  physique: "Résistance aux duels, protection de balle et endurance/cardio.",
+  reflexes_gk: "Arrêts sur la ligne, réactivité.",
+  plongeon_gk: "Capacité à aller chercher les ballons dans les coins.",
+  jeu_au_pied_gk: "Précision des relances à la main et au pied."
+};
 
 export default function PlayerPage() {
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingPlayer, setEditingPlayer] = useState(null);
+  const [editingPlayerId, setEditingPlayerId] = useState(null);
   
-  // États pour le formulaire
-  const [nom, setNom] = useState('');
-  const [note, setNote] = useState(5);
-  const [postes, setPostes] = useState(''); // Géré comme une chaîne de texte séparée par des virgules
+  const [formState, setFormState] = useState(emptyPlayerState);
 
   const navigate = useNavigate();
+
+  // On vérifie si le joueur est gardien en temps réel
+  const isGardien = useMemo(() => {
+    return formState.postes.toLowerCase().split(',').map(p => p.trim()).includes('gardien');
+  }, [formState.postes]);
 
   useEffect(() => {
     fetchPlayers();
@@ -54,47 +90,60 @@ export default function PlayerPage() {
   };
 
   const resetForm = () => {
-    setNom('');
-    setNote(5);
-    setPostes('');
-    setEditingPlayer(null);
+    setFormState(emptyPlayerState);
+    setEditingPlayerId(null);
     setIsFormOpen(false);
   };
 
   const handleOpenForm = (player) => {
     if (player) {
       // Mode édition
-      setEditingPlayer(player);
-      setNom(player.nom);
-      setNote(player.note_de_base);
-      setPostes(player.postes.join(', '));
+      setEditingPlayerId(player.id);
+      setFormState({
+        nom: player.nom,
+        postes: player.postes.join(', '),
+        vitesse: player.vitesse,
+        technique: player.technique,
+        tir: player.tir,
+        passe: player.passe,
+        defense: player.defense,
+        physique: player.physique,
+        reflexes_gk: player.reflexes_gk,
+        plongeon_gk: player.plongeon_gk,
+        jeu_au_pied_gk: player.jeu_au_pied_gk,
+      });
     } else {
       // Mode création
-      setEditingPlayer(null);
-      setNom('');
-      setNote(5);
-      setPostes('');
+      setEditingPlayerId(null);
+      setFormState(emptyPlayerState);
     }
     setIsFormOpen(true);
+  };
+  
+  const handleFormChange = (e) => {
+    const { name, value, type } = e.target;
+    setFormState(prev => ({
+      ...prev,
+      [name]: type === 'number' ? parseFloat(value) : value
+    }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const postesArray = postes.split(',').map(p => p.trim()).filter(Boolean);
-    if (!nom || postesArray.length === 0) {
+    const postesArray = formState.postes.split(',').map(p => p.trim()).filter(Boolean);
+    if (!formState.nom || postesArray.length === 0) {
       toast.error('Veuillez remplir le nom et au moins un poste.');
       return;
     }
 
     const playerData = {
-      nom,
-      note_de_base: parseFloat(note),
+      ...formState,
       postes: postesArray,
     };
 
     try {
-      if (editingPlayer) {
-        await updatePlayer(editingPlayer.id, playerData);
+      if (editingPlayerId) {
+        await updatePlayer(editingPlayerId, playerData);
         toast.success('Joueur mis à jour !');
       } else {
         await createPlayer(playerData);
@@ -103,13 +152,12 @@ export default function PlayerPage() {
       fetchPlayers();
       resetForm();
     } catch (error) {
-      toast.error('Une erreur est survenue.');
+      toast.error(error.response?.data?.detail || 'Une erreur est survenue.');
     }
   };
 
   const handleDelete = async (playerId) => {
     if (!window.confirm('Êtes-vous sûr de vouloir supprimer ce joueur ?')) return;
-
     try {
       await deletePlayer(playerId);
       toast.success('Joueur supprimé');
@@ -120,6 +168,7 @@ export default function PlayerPage() {
   };
 
   return (
+    <TooltipProvider> {/* Nécessaire pour les infobulles */}
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white shadow-sm border-b">
@@ -139,49 +188,47 @@ export default function PlayerPage() {
                 Ajouter un joueur
               </Button>
             </DialogTrigger>
-            <DialogContent onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={() => resetForm()}>
+            <DialogContent className="max-w-3xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={() => resetForm()}>
               <DialogHeader>
-                <DialogTitle>{editingPlayer ? 'Modifier le joueur' : 'Ajouter un nouveau joueur'}</DialogTitle>
+                <DialogTitle>{editingPlayerId ? 'Modifier le joueur' : 'Ajouter un nouveau joueur'}</DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="nom">Nom du joueur</Label>
-                  <Input
-                    id="nom"
-                    value={nom}
-                    onChange={(e) => setNom(e.target.value)}
-                    placeholder="Ex: Zinedine Zidane"
-                    required
-                  />
+              <form onSubmit={handleSubmit} className="max-h-[80vh] overflow-y-auto pr-4">
+                <div className="space-y-4">
+                  {/* Infos de base */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <AttributeInput name="nom" label="Nom du joueur" value={formState.nom} onChange={handleFormChange} placeholder="Ex: Zinedine Zidane" isText />
+                    <AttributeInput name="postes" label="Postes" value={formState.postes} onChange={handleFormChange} description="Ex: Milieu, Attaquant (séparés par une virgule)" placeholder="Gardien, Défenseur, Milieu, Attaquant" isText />
+                  </div>
+                  
+                  {/* Attributs de champ */}
+                  <h3 className="font-medium text-lg pt-2">Attributs de Joueur</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <AttributeInput name="vitesse" label="Vitesse" value={formState.vitesse} onChange={handleFormChange} description={attributeDescriptions.vitesse} />
+                    <AttributeInput name="technique" label="Technique" value={formState.technique} onChange={handleFormChange} description={attributeDescriptions.technique} />
+                    <AttributeInput name="tir" label="Tir" value={formState.tir} onChange={handleFormChange} description={attributeDescriptions.tir} />
+                    <AttributeInput name="passe" label="Passe" value={formState.passe} onChange={handleFormChange} description={attributeDescriptions.passe} />
+                    <AttributeInput name="defense" label="Défense" value={formState.defense} onChange={handleFormChange} description={attributeDescriptions.defense} />
+                    <AttributeInput name="physique" label="Physique" value={formState.physique} onChange={handleFormChange} description={attributeDescriptions.physique} />
+                  </div>
+
+                  {/* Attributs de gardien (conditionnels) */}
+                  {isGardien && (
+                    <>
+                      <h3 className="font-medium text-lg pt-2 text-blue-600">Attributs de Gardien</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-blue-50 rounded-lg">
+                        <AttributeInput name="reflexes_gk" label="Réflexes (GK)" value={formState.reflexes_gk} onChange={handleFormChange} description={attributeDescriptions.reflexes_gk} />
+                        <AttributeInput name="plongeon_gk" label="Plongeon (GK)" value={formState.plongeon_gk} onChange={handleFormChange} description={attributeDescriptions.plongeon_gk} />
+                        <AttributeInput name="jeu_au_pied_gk" label="Jeu au Pied (GK)" value={formState.jeu_au_pied_gk} onChange={handleFormChange} description={attributeDescriptions.jeu_au_pied_gk} />
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="note">Note (sur 10)</Label>
-                  <Input
-                    id="note"
-                    type="number"
-                    min="1"
-                    max="10"
-                    step="0.5"
-                    value={note}
-                    onChange={(e) => setNote(parseFloat(e.target.value))}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="postes">Postes</Label>
-                  <Input
-                    id="postes"
-                    value={postes}
-                    onChange={(e) => setPostes(e.target.value)}
-                    placeholder="Ex: Milieu, Attaquant (séparés par une virgule)"
-                    required
-                  />
-                </div>
-                <DialogFooter>
+                
+                <DialogFooter className="pt-6 sticky bottom-0 bg-white">
                   <DialogClose asChild>
                     <Button type="button" variant="outline" onClick={resetForm}>Annuler</Button>
                   </DialogClose>
-                  <Button type="submit">{editingPlayer ? 'Mettre à jour' : 'Créer'}</Button>
+                  <Button type="submit">{editingPlayerId ? 'Mettre à jour' : 'Créer'}</Button>
                 </DialogFooter>
               </form>
             </DialogContent>
@@ -209,7 +256,7 @@ export default function PlayerPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Nom</TableHead>
-                  <TableHead>Note</TableHead>
+                  <TableHead>Général</TableHead> {/* MODIFIÉ */}
                   <TableHead>Postes</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -219,15 +266,15 @@ export default function PlayerPage() {
                   <TableRow key={player.id}>
                     <TableCell className="font-medium">{player.nom}</TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 font-bold">
                         <Star className="w-4 h-4 text-yellow-400" />
-                        {player.note_de_base}
+                        {player.note_generale} {/* MODIFIÉ */}
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {player.postes.map((poste) => (
-                          <Badge key={poste} variant="secondary">{poste}</Badge>
+                          <Badge key={poste} variant={poste.toLowerCase() === 'gardien' ? 'default' : 'secondary'}>{poste}</Badge>
                         ))}
                       </div>
                     </TableCell>
@@ -246,6 +293,40 @@ export default function PlayerPage() {
           </div>
         )}
       </main>
+    </div>
+    </TooltipProvider>
+  );
+}
+
+// Composant helper pour un champ de formulaire avec infobulle
+function AttributeInput({ name, label, value, onChange, description, isText = false, placeholder = "" }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-1">
+        <Label htmlFor={name}>{label}</Label>
+        {description && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">
+              <p>{description}</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      <Input
+        id={name}
+        name={name}
+        type={isText ? "text" : "number"}
+        min={isText ? undefined : 1}
+        max={isText ? undefined : 10}
+        step={isText ? undefined : 0.5}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        required
+      />
     </div>
   );
 }
