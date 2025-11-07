@@ -35,6 +35,9 @@ export const regenerateGuestCode = () => {
   return axios.post(`${API}/admin/guest-code`);
 };
 
+export const getGuestLogs = () => {
+  return axios.get(`${API}/admin/guest-logs`);
+};
 
 // ===================================
 // PLAYERS (Inchangé)
