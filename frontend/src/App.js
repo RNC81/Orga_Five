@@ -3,13 +3,15 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import AuthPage from './pages/AuthPage';
 import Dashboard from './pages/Dashboard';
-import PlayerPage from './pages/PlayerPage'; // <-- 1. IMPORTER LA NOUVELLE PAGE
+import PlayerPage from './pages/PlayerPage';
+import UserPage from './pages/UserPage'; // <-- 1. IMPORTER LA NOUVELLE PAGE
 
 import { Toaster } from 'sonner';
 import './App.css';
 
 // ... (Le code de PrivateRoute et AuthRoute reste le même) ...
 function PrivateRoute({ children }) {
+  // ... (code inchangé)
   const { user, loading } = useAuth();
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center">Chargement...</div>;
@@ -21,6 +23,7 @@ function PrivateRoute({ children }) {
 }
 
 function AuthRoute({ children }) {
+  // ... (code inchangé)
   const { user, loading } = useAuth();
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center">Chargement...</div>;
@@ -57,8 +60,7 @@ function App() {
               </PrivateRoute>
             } 
           />
-
-          {/* 👇 2. AJOUTER LA NOUVELLE ROUTE CI-DESSOUS 👇 */}
+          
           <Route 
             path="/players" 
             element={
@@ -68,8 +70,17 @@ function App() {
             } 
           />
 
-          {/* NOTE : Les autres pages (Utilisateurs, Evénements)
-              ne sont pas encore créées. Nous les ajouterons ici plus tard. */}
+          {/* 👇 2. AJOUTER LA NOUVELLE ROUTE CI-DESSOUS 👇 */}
+          <Route 
+            path="/users" 
+            element={
+              <PrivateRoute>
+                <UserPage />
+              </PrivateRoute>
+            } 
+          />
+
+          {/* NOTE : La page Evénements n'est pas encore créée. */}
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
 
