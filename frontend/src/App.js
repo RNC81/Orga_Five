@@ -5,7 +5,8 @@ import AuthPage from './pages/AuthPage';
 import Dashboard from './pages/Dashboard';
 import PlayerPage from './pages/PlayerPage';
 import UserPage from './pages/UserPage';
-import EventCreatePage from './pages/EventCreatePage'; // <-- 1. IMPORTER LA NOUVELLE PAGE
+import EventCreatePage from './pages/EventCreatePage';
+import EventManagePage from './pages/EventManagePage'; // <-- 1. IMPORTER LA NOUVELLE PAGE
 
 import { Toaster } from 'sonner';
 import './App.css';
@@ -80,7 +81,6 @@ function App() {
             } 
           />
 
-          {/* 👇 2. AJOUTER LA NOUVELLE ROUTE CI-DESSOUS 👇 */}
           <Route 
             path="/events/create" 
             element={
@@ -89,8 +89,17 @@ function App() {
               </PrivateRoute>
             } 
           />
-
-          {/* NOTE : La page /events/:id n'est pas encore créée. */}
+          
+          {/* 👇 2. AJOUTER LA NOUVELLE ROUTE CI-DESSOUS 👇 */}
+          {/* C'est la route dynamique pour un match spécifique */}
+          <Route 
+            path="/events/:id" 
+            element={
+              <PrivateRoute>
+                <EventManagePage />
+              </PrivateRoute>
+            } 
+          />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
 
