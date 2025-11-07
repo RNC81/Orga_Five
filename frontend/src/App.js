@@ -1,53 +1,100 @@
-import { useEffect } from "react";
-import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import AuthPage from './pages/AuthPage';
+import Dashboard from './pages/Dashboard';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+// Importation du composant Toaster pour les notifications (utilisé dans AuthPage)
+// Nous utilisons la version de 'sonner' car AuthPage l'importe
+import { Toaster } from 'sonner';
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
+// Importation du CSS de base
+import './App.css';
 
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
+/**
+ * Un composant "Route Protégée"
+ * Vérifie si l'utilisateur est connecté avant d'afficher la page demandée.
+ * Sinon, il le redirige vers /login.
+ */
+function PrivateRoute({ children }) {
+  const { user, loading } = useAuth();
 
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+  if (loading) {
+    // Affiche un écran de chargement pendant la vérification de l'authentification
+    return <div className="min-h-screen flex items-center justify-center">Chargement...</div>;
+  }
 
+  if (!user) {
+    // Non connecté, redirection vers la page de connexion
+    return <Navigate to="/login" replace />;
+  }
+
+  // Connecté, affiche le composant enfant (par ex: le Dashboard)
+  return children;
+}
+
+/**
+ * Un composant "Route d'Authentification"
+ * Si l'utilisateur est *déjà* connecté, il le redirige vers le tableau de bord.
+ * C'est pour éviter que l'utilisateur ne revoie la page de connexion.
+ */
+function AuthRoute({ children }) {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Chargement...</div>;
+  }
+
+  if (user) {
+    // Déjà connecté, redirection vers le tableau de bord
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  // Pas connecté, affiche le composant enfant (la page de connexion)
+  return children;
+}
+
+/**
+ * Le composant principal de l'application
+ */
 function App() {
   return (
-    <div className="App">
+    <AuthProvider>
+      {/* Le Provider de Toasts pour les notifications */}
+      <Toaster position="top-right" richColors />
+
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
+
+          {/* Route pour la connexion/inscription */}
+          <Route 
+            path="/login" 
+            element={
+              <AuthRoute>
+                <AuthPage />
+              </AuthRoute>
+            } 
+          />
+
+          {/* Route protégée pour le tableau de bord */}
+          <Route 
+            path="/dashboard" 
+            element={
+              <PrivateRoute>
+                <Dashboard />
+              </PrivateRoute>
+            } 
+          />
+
+          {/* NOTE : Les autres pages (Joueurs, Utilisateurs, Evénements)
+              ne sont pas encore créées. Nous les ajouterons ici plus tard. */}
+
+          {/* Route par défaut : redirige tout vers /dashboard */}
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+
         </Routes>
       </BrowserRouter>
-    </div>
+    </AuthProvider>
   );
 }
 
