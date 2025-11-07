@@ -4,7 +4,8 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import AuthPage from './pages/AuthPage';
 import Dashboard from './pages/Dashboard';
 import PlayerPage from './pages/PlayerPage';
-import UserPage from './pages/UserPage'; // <-- 1. IMPORTER LA NOUVELLE PAGE
+import UserPage from './pages/UserPage';
+import EventCreatePage from './pages/EventCreatePage'; // <-- 1. IMPORTER LA NOUVELLE PAGE
 
 import { Toaster } from 'sonner';
 import './App.css';
@@ -70,7 +71,6 @@ function App() {
             } 
           />
 
-          {/* 👇 2. AJOUTER LA NOUVELLE ROUTE CI-DESSOUS 👇 */}
           <Route 
             path="/users" 
             element={
@@ -80,7 +80,17 @@ function App() {
             } 
           />
 
-          {/* NOTE : La page Evénements n'est pas encore créée. */}
+          {/* 👇 2. AJOUTER LA NOUVELLE ROUTE CI-DESSOUS 👇 */}
+          <Route 
+            path="/events/create" 
+            element={
+              <PrivateRoute>
+                <EventCreatePage />
+              </PrivateRoute>
+            } 
+          />
+
+          {/* NOTE : La page /events/:id n'est pas encore créée. */}
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
 
