@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -14,6 +14,8 @@ import bcrypt
 import jwt
 import random
 from itertools import combinations
+import secrets
+import string
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,6 +27,8 @@ db = client[os.environ['DB_NAME']]
 
 # JWT Configuration
 SECRET_KEY = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production-' + str(uuid.uuid4()))
+# NOUVELLE VARIABLE D'ENVIRONNEMENT pour le Cron Job
+CRON_SECRET = os.environ.get('CRON_SECRET', 'your-cron-secret-change-this')
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
@@ -40,14 +44,10 @@ class User(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: EmailStr
     password_hash: str
-    role: str = "co-organisateur"  # "admin" ou "co-organisateur"
+    role: str = "admin" # Seuls les admins ont un compte permanent
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
-
-class UserInvite(BaseModel):
     email: EmailStr
     password: str
 
@@ -60,17 +60,29 @@ class UserResponse(BaseModel):
     email: str
     role: str
 
+# NOUVEAU: Modèle pour la connexion invité
+class GuestLogin(BaseModel):
+    name: str = Field(..., min_length=2)
+    code: str = Field(..., min_length=6)
+
+# NOUVEAU: Modèle pour le code d'invitation dans la DB
+class GuestCode(BaseModel):
+    id: str = Field(default="singleton") # Il n'y aura qu'un seul document
+    code: str
+    expires_at: datetime
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
 
+# ... (Les modèles Player, Event, etc. restent inchangés) ...
 class Player(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     nom: str
     note_de_base: float = Field(ge=1, le=10)
-    postes: List[str]  # ["Défenseur", "Milieu", "Attaquant", "Gardien"]
+    postes: List[str]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class PlayerCreate(BaseModel):
@@ -88,8 +100,8 @@ class JoueurPresent(BaseModel):
     note_temporaire: float = Field(ge=1, le=10)
 
 class ContrainteAffinite(BaseModel):
-    type: str  # "lier" ou "separer"
-    joueurs: List[str]  # Liste de joueur_ids
+    type: str
+    joueurs: List[str]
 
 class Event(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -99,7 +111,7 @@ class Event(BaseModel):
     joueurs_presents: List[JoueurPresent] = []
     nombre_equipes: int = 2
     contraintes_affinite: List[ContrainteAffinite] = []
-    equipes_generees: List[List[str]] = []  # Liste de listes de joueur_ids
+    equipes_generees: List[List[str]] = []
     share_token: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     warning_message: Optional[str] = None
@@ -116,9 +128,6 @@ class EventUpdate(BaseModel):
     nombre_equipes: Optional[int] = None
     contraintes_affinite: Optional[List[ContrainteAffinite]] = None
     equipes_generees: Optional[List[List[str]]] = None
-
-class GenerateTeamsRequest(BaseModel):
-    pass
 
 class TeamStats(BaseModel):
     note_moyenne: float
@@ -137,13 +146,25 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-def create_access_token(data: dict):
+# MODIFIÉ: Ajout de 'name' et 'role' dans le token
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
+    
+    # Assurez-vous que role et name (ou email) sont dans le token
+    if "role" not in to_encode:
+        to_encode["role"] = "co-organisateur" # Par défaut
+    if "name" not in to_encode and "email" in to_encode:
+        to_encode["name"] = to_encode["email"]
+
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
+# MODIFIÉ: Gère les utilisateurs admin (DB) et les invités (token-only)
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserResponse:
     try:
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -155,13 +176,23 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except jwt.JWTError:
         raise HTTPException(status_code=401, detail="Token invalide")
     
+    # Si c'est un invité, l'ID ne sera pas dans la DB. On se fie au token.
     user_doc = await db.users.find_one({"id": user_id}, {"_id": 0})
-    if user_doc is None:
-        raise HTTPException(status_code=401, detail="Utilisateur non trouvé")
     
-    return User(**user_doc)
+    if user_doc:
+        # C'est un Admin (ou un utilisateur permanent)
+        return UserResponse(id=user_doc["id"], email=user_doc["email"], role=user_doc["role"])
+    
+    # C'est un invité (token-only)
+    role = payload.get("role")
+    name = payload.get("name")
+    if role == "co-organisateur" and name:
+        return UserResponse(id=user_id, email=name, role=role)
 
-async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    raise HTTPException(status_code=401, detail="Utilisateur non trouvé")
+
+
+async def get_admin_user(current_user: UserResponse = Depends(get_current_user)) -> UserResponse:
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
     return current_user
@@ -170,16 +201,12 @@ async def get_admin_user(current_user: User = Depends(get_current_user)) -> User
 
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
-    # Vérifier si l'utilisateur existe déjà
-    existing_user = await db.users.find_one({"email": user_data.email}, {"_id": 0})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Cet email est déjà utilisé")
-    
-    # Vérifier si c'est le premier utilisateur (devient admin)
+    # Seul le premier utilisateur peut s'inscrire et devient admin
     user_count = await db.users.count_documents({})
-    role = "admin" if user_count == 0 else "co-organisateur"
+    if user_count > 0:
+        raise HTTPException(status_code=403, detail="L'inscription est désactivée. Seul l'admin peut inviter.")
     
-    # Créer l'utilisateur
+    role = "admin"
     user = User(
         email=user_data.email,
         password_hash=hash_password(user_data.password),
@@ -190,8 +217,9 @@ async def register(user_data: UserCreate):
     user_dict['created_at'] = user_dict['created_at'].isoformat()
     await db.users.insert_one(user_dict)
     
-    # Créer le token
-    access_token = create_access_token({"sub": user.id})
+    access_token = create_access_token(
+        data={"sub": user.id, "role": user.role, "name": user.email}
+    )
     
     return TokenResponse(
         access_token=access_token,
@@ -200,6 +228,7 @@ async def register(user_data: UserCreate):
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
+    # Connexion pour l'Admin
     user_doc = await db.users.find_one({"email": credentials.email}, {"_id": 0})
     if not user_doc:
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
@@ -208,57 +237,101 @@ async def login(credentials: UserLogin):
     if not verify_password(credentials.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     
-    access_token = create_access_token({"sub": user.id})
+    access_token = create_access_token(
+         data={"sub": user.id, "role": user.role, "name": user.email}
+    )
     
     return TokenResponse(
         access_token=access_token,
         user=UserResponse(id=user.id, email=user.email, role=user.role)
     )
 
-@api_router.get("/auth/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
-    return UserResponse(id=current_user.id, email=current_user.email, role=current_user.role)
-
-# ============= USER MANAGEMENT (Admin only) =============
-
-@api_router.get("/users", response_model=List[UserResponse])
-async def get_users(current_user: User = Depends(get_admin_user)):
-    users = await db.users.find({}, {"_id": 0}).to_list(1000)
-    return [UserResponse(id=u["id"], email=u["email"], role=u["role"]) for u in users]
-
-@api_router.post("/users", response_model=UserResponse)
-async def invite_user(user_invite: UserInvite, current_user: User = Depends(get_admin_user)):
-    existing_user = await db.users.find_one({"email": user_invite.email}, {"_id": 0})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Cet email est déjà utilisé")
+# NOUVEAU: Connexion pour les invités
+@api_router.post("/auth/guest-login", response_model=TokenResponse)
+async def guest_login(credentials: GuestLogin):
+    code_doc = await db.guest_codes.find_one({"id": "singleton"}, {"_id": 0})
     
-    user = User(
-        email=user_invite.email,
-        password_hash=hash_password(user_invite.password),
-        role="co-organisateur"
+    if not code_doc or credentials.code != code_doc["code"]:
+        raise HTTPException(status_code=401, detail="Code d'invitation incorrect")
+        
+    expires_at = datetime.fromisoformat(code_doc["expires_at"])
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=401, detail="Le code d'invitation a expiré")
+
+    # Créer un token invité
+    guest_id = f"guest_{credentials.name.lower()}_{str(uuid.uuid4())[:4]}"
+    guest_role = "co-organisateur"
+    
+    access_token = create_access_token(
+         data={"sub": guest_id, "role": guest_role, "name": credentials.name}
     )
     
-    user_dict = user.model_dump()
-    user_dict['created_at'] = user_dict['created_at'].isoformat()
-    await db.users.insert_one(user_dict)
-    
-    return UserResponse(id=user.id, email=user.email, role=user.role)
+    return TokenResponse(
+        access_token=access_token,
+        user=UserResponse(id=guest_id, email=credentials.name, role=guest_role)
+    )
 
-@api_router.delete("/users/{user_id}")
-async def delete_user(user_id: str, current_user: User = Depends(get_admin_user)):
-    if user_id == current_user.id:
-        raise HTTPException(status_code=400, detail="Vous ne pouvez pas supprimer votre propre compte")
-    
-    result = await db.users.delete_one({"id": user_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
-    
-    return {"message": "Utilisateur supprimé avec succès"}
+@api_router.get("/auth/me", response_model=UserResponse)
+async def get_me(current_user: UserResponse = Depends(get_current_user)):
+    return current_user
 
-# ============= PLAYERS ROUTES =============
+# ============= GUEST CODE (Admin only) =============
+
+# NOUVEAU: Helper pour générer un code
+async def generate_new_guest_code() -> GuestCode:
+    # Code simple de 6 caractères
+    alphabet = string.ascii_uppercase + string.digits
+    code = ''.join(secrets.choice(alphabet) for i in range(6))
+    
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    
+    code_data = GuestCode(code=code, expires_at=expires_at)
+    
+    await db.guest_codes.update_one(
+        {"id": "singleton"},
+        {"$set": {"code": code_data.code, "expires_at": code_data.expires_at.isoformat()}},
+        upsert=True
+    )
+    return code_data
+
+# NOUVEAU: Helper pour récupérer ou créer le code
+async def get_or_create_guest_code() -> GuestCode:
+    code_doc = await db.guest_codes.find_one({"id": "singleton"}, {"_id": 0})
+    
+    if not code_doc or datetime.now(timezone.utc) > datetime.fromisoformat(code_doc["expires_at"]):
+        # Le code n'existe pas ou a expiré, on en crée un nouveau
+        return await generate_new_guest_code()
+        
+    return GuestCode(code=code_doc["code"], expires_at=datetime.fromisoformat(code_doc["expires_at"]))
+
+# NOUVEAU: Route pour l'admin pour VOIR le code
+@api_router.get("/admin/guest-code", response_model=GuestCode)
+async def get_guest_code(current_user: UserResponse = Depends(get_admin_user)):
+    code = await get_or_create_guest_code()
+    return code
+
+# NOUVEAU: Route pour l'admin pour GENERER un nouveau code
+@api_router.post("/admin/guest-code", response_model=GuestCode)
+async def create_new_guest_code(current_user: UserResponse = Depends(get_admin_user)):
+    code = await generate_new_guest_code()
+    return code
+
+# ============= CRON JOB ROUTE (Secret) =============
+
+# NOUVEAU: Route pour le Cron Job de Render
+@api_router.post("/cron/regenerate-code")
+async def cron_regenerate_code(secret: str = Body(..., embed=True)):
+    if secret != CRON_SECRET:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    
+    await generate_new_guest_code()
+    return {"message": "Nouveau code généré avec succès"}
+
+
+# ============= PLAYERS ROUTES (Inchangé) =============
 
 @api_router.get("/players", response_model=List[Player])
-async def get_players(current_user: User = Depends(get_current_user)):
+async def get_players(current_user: UserResponse = Depends(get_current_user)):
     players = await db.players.find({}, {"_id": 0}).to_list(1000)
     for player in players:
         if isinstance(player.get('created_at'), str):
@@ -266,7 +339,7 @@ async def get_players(current_user: User = Depends(get_current_user)):
     return players
 
 @api_router.post("/players", response_model=Player)
-async def create_player(player_data: PlayerCreate, current_user: User = Depends(get_current_user)):
+async def create_player(player_data: PlayerCreate, current_user: UserResponse = Depends(get_current_user)):
     player = Player(**player_data.model_dump())
     player_dict = player.model_dump()
     player_dict['created_at'] = player_dict['created_at'].isoformat()
@@ -274,7 +347,7 @@ async def create_player(player_data: PlayerCreate, current_user: User = Depends(
     return player
 
 @api_router.put("/players/{player_id}", response_model=Player)
-async def update_player(player_id: str, player_update: PlayerUpdate, current_user: User = Depends(get_current_user)):
+async def update_player(player_id: str, player_update: PlayerUpdate, current_user: UserResponse = Depends(get_current_user)):
     player_doc = await db.players.find_one({"id": player_id}, {"_id": 0})
     if not player_doc:
         raise HTTPException(status_code=404, detail="Joueur non trouvé")
@@ -289,20 +362,22 @@ async def update_player(player_id: str, player_update: PlayerUpdate, current_use
     return Player(**updated_doc)
 
 @api_router.delete("/players/{player_id}")
-async def delete_player(player_id: str, current_user: User = Depends(get_admin_user)):
+async def delete_player(player_id: str, current_user: UserResponse = Depends(get_admin_user)):
     result = await db.players.delete_one({"id": player_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Joueur non trouvé")
     return {"message": "Joueur supprimé avec succès"}
 
-# ============= EVENTS ROUTES =============
+# ============= EVENTS ROUTES (Modifié pour utiliser UserResponse) =============
 
 @api_router.get("/events", response_model=List[Event])
-async def get_events(current_user: User = Depends(get_current_user)):
-    if current_user.role == "admin":
-        events = await db.events.find({}, {"_id": 0}).to_list(1000)
-    else:
-        events = await db.events.find({"organisateur_id": current_user.id}, {"_id": 0}).to_list(1000)
+async def get_events(current_user: UserResponse = Depends(get_current_user)):
+    # Admin voit tout, Co-orga voit seulement les siens
+    query = {}
+    if current_user.role != "admin":
+        query = {"organisateur_id": current_user.id}
+        
+    events = await db.events.find(query, {"_id": 0}).to_list(1000)
     
     for event in events:
         if isinstance(event.get('created_at'), str):
@@ -310,7 +385,7 @@ async def get_events(current_user: User = Depends(get_current_user)):
     return events
 
 @api_router.get("/events/{event_id}", response_model=Event)
-async def get_event(event_id: str, current_user: User = Depends(get_current_user)):
+async def get_event(event_id: str, current_user: UserResponse = Depends(get_current_user)):
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
@@ -325,10 +400,10 @@ async def get_event(event_id: str, current_user: User = Depends(get_current_user
     return event
 
 @api_router.post("/events", response_model=Event)
-async def create_event(event_data: EventCreate, current_user: User = Depends(get_current_user)):
+async def create_event(event_data: EventCreate, current_user: UserResponse = Depends(get_current_user)):
     event = Event(
         **event_data.model_dump(),
-        organisateur_id=current_user.id
+        organisateur_id=current_user.id # L'ID de l'admin ou de l'invité
     )
     event_dict = event.model_dump()
     event_dict['created_at'] = event_dict['created_at'].isoformat()
@@ -336,7 +411,7 @@ async def create_event(event_data: EventCreate, current_user: User = Depends(get
     return event
 
 @api_router.put("/events/{event_id}", response_model=Event)
-async def update_event(event_id: str, event_update: EventUpdate, current_user: User = Depends(get_current_user)):
+async def update_event(event_id: str, event_update: EventUpdate, current_user: UserResponse = Depends(get_current_user)):
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
@@ -355,7 +430,7 @@ async def update_event(event_id: str, event_update: EventUpdate, current_user: U
     return Event(**updated_doc)
 
 @api_router.delete("/events/{event_id}")
-async def delete_event(event_id: str, current_user: User = Depends(get_current_user)):
+async def delete_event(event_id: str, current_user: UserResponse = Depends(get_current_user)):
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
@@ -367,15 +442,13 @@ async def delete_event(event_id: str, current_user: User = Depends(get_current_u
     await db.events.delete_one({"id": event_id})
     return {"message": "Événement supprimé avec succès"}
 
-# ============= TEAM GENERATION ALGORITHM =============
+# ============= TEAM GENERATION ALGORITHM (Inchangé) =============
 
 async def get_player_details(joueur_ids: List[str]) -> Dict[str, Player]:
-    """Récupère les détails des joueurs"""
     players = await db.players.find({"id": {"$in": joueur_ids}}, {"_id": 0}).to_list(1000)
     return {p["id"]: Player(**p) for p in players}
 
 def calculate_team_stats(team: List[str], joueurs_map: Dict[str, Player], notes_map: Dict[str, float]) -> Dict:
-    """Calcule les statistiques d'une équipe"""
     total_note = sum(notes_map.get(jid, 0) for jid in team)
     note_moyenne = total_note / len(team) if team else 0
     
@@ -393,10 +466,8 @@ def calculate_team_stats(team: List[str], joueurs_map: Dict[str, Player], notes_
     }
 
 def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffinite]) -> bool:
-    """Vérifie si toutes les contraintes sont respectées"""
     for contrainte in contraintes:
         if contrainte.type == "lier":
-            # Les joueurs liés doivent être dans la même équipe
             joueur_teams = {}
             for team_idx, team in enumerate(teams):
                 for joueur_id in contrainte.joueurs:
@@ -407,17 +478,14 @@ def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffini
                 return False
         
         elif contrainte.type == "separer":
-            # Les joueurs séparés ne doivent pas être dans la même équipe
             for team in teams:
                 joueurs_in_team = [j for j in contrainte.joueurs if j in team]
                 if len(joueurs_in_team) > 1:
                     return False
-    
     return True
 
 def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipes: int, 
                            contraintes: List[ContrainteAffinite], joueurs_map: Dict[str, Player]) -> tuple:
-    """Génère des équipes équilibrées"""
     notes_map = {jp.joueur_id: jp.note_temporaire for jp in joueurs_presents}
     joueur_ids = list(notes_map.keys())
     n_joueurs = len(joueur_ids)
@@ -425,7 +493,6 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
     if n_joueurs < nombre_equipes:
         raise ValueError("Pas assez de joueurs pour former le nombre d'équipes demandé")
     
-    # Stratégie : essayer plusieurs distributions aléatoires et garder la meilleure
     best_teams = None
     best_score = float('inf')
     warning_message = None
@@ -434,11 +501,9 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
     valid_attempts = 0
     
     for attempt in range(max_attempts):
-        # Mélanger les joueurs
         shuffled = joueur_ids.copy()
         random.shuffle(shuffled)
         
-        # Distribution de base
         base_size = n_joueurs // nombre_equipes
         extra = n_joueurs % nombre_equipes
         
@@ -449,22 +514,18 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
             teams.append(shuffled[idx:idx + team_size])
             idx += team_size
         
-        # Vérifier les contraintes
         if not check_constraints(teams, contraintes):
             continue
         
         valid_attempts += 1
         
-        # Calculer le score (différence entre équipes)
         team_stats = [calculate_team_stats(team, joueurs_map, notes_map) for team in teams]
         notes_moyennes = [stats["note_moyenne"] for stats in team_stats]
         
-        # Score basé sur l'écart-type des notes moyennes
         mean_of_means = sum(notes_moyennes) / len(notes_moyennes)
         variance = sum((nm - mean_of_means) ** 2 for nm in notes_moyennes) / len(notes_moyennes)
         note_score = variance
         
-        # Score basé sur la distribution des postes
         poste_score = 0
         all_postes = set()
         for stats in team_stats:
@@ -477,31 +538,24 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
                 poste_variance = sum((pc - mean_poste) ** 2 for pc in poste_counts) / len(poste_counts)
                 poste_score += poste_variance
         
-        total_score = note_score * 2 + poste_score  # Prioriser l'équilibre des notes
+        total_score = note_score * 2 + poste_score
         
         if total_score < best_score:
             best_score = total_score
             best_teams = teams
             
-            # Vérifier si déséquilibre majeur
             max_note = max(notes_moyennes)
             min_note = min(notes_moyennes)
             if max_note - min_note > 1.5:
-                warning_message = f"⚠️ Les contraintes d'affinité forcent un déséquilibre : écart de {max_note - min_note:.2f} points entre l'équipe la plus forte et la plus faible."
+                warning_message = f"⚠️ Les contraintes d'affinité forcent un déséquilibre : écart de {max_note - min_note:.2f} points."
     
     if best_teams is None:
         raise ValueError("Impossible de générer des équipes respectant toutes les contraintes")
     
-    # Si joueurs en surplus, les ajouter aux équipes les plus faibles
-    if n_joueurs % nombre_equipes != 0:
-        final_stats = [calculate_team_stats(team, joueurs_map, notes_map) for team in best_teams]
-        team_notes = [(i, stats["note_moyenne"]) for i, stats in enumerate(final_stats)]
-        team_notes.sort(key=lambda x: x[1])
-    
     return best_teams, warning_message
 
 @api_router.post("/events/{event_id}/generate", response_model=GenerateTeamsResponse)
-async def generate_teams(event_id: str, current_user: User = Depends(get_current_user)):
+async def generate_teams(event_id: str, current_user: UserResponse = Depends(get_current_user)):
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
@@ -513,11 +567,9 @@ async def generate_teams(event_id: str, current_user: User = Depends(get_current
     if not event.joueurs_presents:
         raise HTTPException(status_code=400, detail="Aucun joueur présent")
     
-    # Récupérer les détails des joueurs
     joueur_ids = [jp.joueur_id for jp in event.joueurs_presents]
     joueurs_map = await get_player_details(joueur_ids)
     
-    # Générer les équipes
     try:
         teams, warning = generate_balanced_teams(
             event.joueurs_presents,
@@ -526,13 +578,11 @@ async def generate_teams(event_id: str, current_user: User = Depends(get_current
             joueurs_map
         )
         
-        # Sauvegarder les équipes
         await db.events.update_one(
             {"id": event_id},
             {"$set": {"equipes_generees": teams, "warning_message": warning}}
         )
         
-        # Préparer la réponse avec les statistiques
         notes_map = {jp.joueur_id: jp.note_temporaire for jp in event.joueurs_presents}
         response_teams = []
         
@@ -560,7 +610,7 @@ async def generate_teams(event_id: str, current_user: User = Depends(get_current
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# ============= SHARE LINK =============
+# ============= SHARE LINK (Inchangé) =============
 
 @api_router.get("/share/{share_token}")
 async def get_shared_event(share_token: str):
@@ -573,12 +623,10 @@ async def get_shared_event(share_token: str):
     if not event.equipes_generees:
         raise HTTPException(status_code=400, detail="Les équipes n'ont pas encore été générées")
     
-    # Récupérer les détails des joueurs
     all_joueur_ids = [jp.joueur_id for jp in event.joueurs_presents]
     joueurs_map = await get_player_details(all_joueur_ids)
     notes_map = {jp.joueur_id: jp.note_temporaire for jp in event.joueurs_presents}
     
-    # Préparer les équipes avec statistiques
     response_teams = []
     for team in event.equipes_generees:
         stats = calculate_team_stats(team, joueurs_map, notes_map)
@@ -609,7 +657,7 @@ async def get_shared_event(share_token: str):
 
 @api_router.get("/")
 async def root():
-    return {"message": "API Générateur d'Équipes de Foot"}
+    return {"message": "API Générateur d'Équipes de Foot V2 (Guest Code)"}
 
 # Include router
 app.include_router(api_router)
