@@ -1,9 +1,9 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from 'axios';
+// On importe nos nouvelles fonctions API
+import { getMe, adminLogin as apiAdminLogin, registerFirstAdmin as apiRegister, guestLogin as apiGuestLogin } from '../services/api';
 
 const AuthContext = createContext(null);
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -21,19 +21,18 @@ export const AuthProvider = ({ children }) => {
 
   const fetchUser = async () => {
     try {
-      const response = await axios.get(`${API}/auth/me`);
+      const response = await getMe(); // Utilise la route /auth/me
       setUser(response.data);
     } catch (error) {
       console.error('Failed to fetch user:', error);
-      logout();
+      logout(); // Si le token est invalide, on déconnecte
     } finally {
       setLoading(false);
     }
   };
 
-  const login = async (email, password) => {
-    const response = await axios.post(`${API}/auth/login`, { email, password });
-    const { access_token, user: userData } = response.data;
+  // Met à jour le token et l'utilisateur
+  const setAuthData = (access_token, userData) => {
     localStorage.setItem('token', access_token);
     setToken(access_token);
     setUser(userData);
@@ -41,14 +40,23 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
-  const register = async (email, password) => {
-    const response = await axios.post(`${API}/auth/register`, { email, password });
+  const adminLogin = async (email, password) => {
+    const response = await apiAdminLogin(email, password);
     const { access_token, user: userData } = response.data;
-    localStorage.setItem('token', access_token);
-    setToken(access_token);
-    setUser(userData);
-    axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-    return userData;
+    return setAuthData(access_token, userData);
+  };
+
+  const register = async (email, password) => {
+    const response = await apiRegister(email, password);
+    const { access_token, user: userData } = response.data;
+    return setAuthData(access_token, userData);
+  };
+
+  // NOUVELLE FONCTION
+  const guestLogin = async (name, code) => {
+    const response = await apiGuestLogin(name, code);
+    const { access_token, user: userData } = response.data;
+    return setAuthData(access_token, userData);
   };
 
   const logout = () => {
@@ -59,7 +67,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, loading }}>
+    <AuthContext.Provider value={{ user, adminLogin, register, guestLogin, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );
