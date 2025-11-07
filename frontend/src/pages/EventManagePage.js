@@ -12,8 +12,15 @@ import {
   TableHeader,
   TableRow,
 } from '../components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select'; // Importation de Select
 import { toast } from 'sonner';
-import { ArrowLeft, UserPlus, UserMinus, Star, Shuffle, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, UserPlus, UserMinus, Star, Shuffle, AlertTriangle, Link, Link2Off, Trash2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 
 export default function EventManagePage() {
@@ -23,6 +30,10 @@ export default function EventManagePage() {
   const [event, setEvent] = useState(null);
   const [allPlayers, setAllPlayers] = useState([]);
   const [presentPlayersMap, setPresentPlayersMap] = useState(new Map());
+  
+  // NOUVEL ÉTAT pour les contraintes
+  const [constraints, setConstraints] = useState([]); // ex: [{id: 1, type: 'lier', joueurs: [id1, id2]}]
+  
   const [generatedTeams, setGeneratedTeams] = useState([]);
   const [warningMessage, setWarningMessage] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -46,19 +57,12 @@ export default function EventManagePage() {
         });
         setPresentPlayersMap(initialMap);
         
+        // Pré-remplir les contraintes
+        setConstraints(eventRes.data.contraintes_affinite.map((c, i) => ({...c, id: i})));
+        
         if (eventRes.data.equipes_generees && eventRes.data.equipes_generees.length > 0) {
-          // Si des équipes existent, on doit les reconstruire car elles ne sont pas
-          // stockées avec les détails des joueurs, seulement les IDs.
-          // On appelle generateTeams() qui lit les équipes sauvegardées si elles existent.
-          // (Correction: on va appeler une fonction qui reconstruit les stats)
-          
-          // Pour l'instant, on se concentre sur la génération
-          // On va juste stocker les équipes générées du backend
-          if (eventRes.data.equipes_generees.length > 0) {
-            // On doit reconstruire les données des équipes
-            rebuildTeamData(eventRes.data.equipes_generees, playersRes.data, initialMap);
-            setWarningMessage(eventRes.data.warning_message);
-          }
+          rebuildTeamData(eventRes.data.equipes_generees, playersRes.data, initialMap);
+          setWarningMessage(eventRes.data.warning_message);
         }
         
       } catch (error) {
@@ -71,50 +75,46 @@ export default function EventManagePage() {
     loadData();
   }, [eventId, navigate]);
   
-  // Helper pour reconstruire les données des équipes
   const rebuildTeamData = (teamIdsList, allPlayersData, notesMap) => {
     const teams = teamIdsList.map(teamIds => {
       const teamPlayers = teamIds.map(id => {
         const player = allPlayersData.find(p => p.id === id);
         return {
           ...player,
-          note: notesMap.get(id) || player.note_generale, // Affiche la note temporaire
+          note: notesMap.get(id) || player.note_generale,
         };
       });
-      
       const teamNotes = teamPlayers.map(p => p.note);
       const avgNote = teamNotes.reduce((a, b) => a + b, 0) / teamNotes.length;
-      
       return {
         joueurs: teamPlayers,
         note_moyenne: avgNote.toFixed(1)
-        // (On ne reconstruit pas les postes pour l'instant)
       };
     });
     setGeneratedTeams(teams);
   };
 
-
-  // 2. Logique pour séparer les listes de joueurs
+  // 2. Logique pour les listes de joueurs
   const { presentPlayers, availablePlayers } = useMemo(() => {
     const present = allPlayers.filter(p => presentPlayersMap.has(p.id));
     const available = allPlayers.filter(p => !presentPlayersMap.has(p.id));
     return { presentPlayers: present, availablePlayers: available };
   }, [allPlayers, presentPlayersMap]);
 
-  // 3. Actions sur les joueurs (MODIFIÉ)
+  // 3. Actions sur les joueurs
   const addPlayer = (player) => {
     const newMap = new Map(presentPlayersMap);
-    // On ajoute avec sa NOTE GÉNÉRALE calculée
-    newMap.set(player.id, player.note_generale); 
+    newMap.set(player.id, player.note_generale);
     setPresentPlayersMap(newMap);
-    setGeneratedTeams([]); 
+    setGeneratedTeams([]);
   };
 
   const removePlayer = (playerId) => {
     const newMap = new Map(presentPlayersMap);
     newMap.delete(playerId);
     setPresentPlayersMap(newMap);
+    // On retire aussi les contraintes qui impliquaient ce joueur
+    setConstraints(prev => prev.filter(c => !c.joueurs.includes(playerId)));
     setGeneratedTeams([]);
   };
 
@@ -124,29 +124,53 @@ export default function EventManagePage() {
     if (parsedNote >= 1 && parsedNote <= 10) {
       newMap.set(playerId, parsedNote);
     } else {
-      newMap.set(playerId, 0); // Permet de vider le champ
+      newMap.set(playerId, 0);
     }
     setPresentPlayersMap(newMap);
     setGeneratedTeams([]);
   };
 
-  // 4. Sauvegarder les changements avant de générer
+  // 4. NOUVELLES Actions sur les contraintes
+  const addConstraint = (type, player1Id, player2Id) => {
+    if (!player1Id || !player2Id || player1Id === player2Id) {
+      toast.error("Veuillez sélectionner deux joueurs différents.");
+      return;
+    }
+    const newConstraint = {
+      id: Date.now(), // ID simple pour la liste
+      type: type,
+      joueurs: [player1Id, player2Id]
+    };
+    setConstraints(prev => [...prev, newConstraint]);
+    setGeneratedTeams([]);
+  };
+
+  const removeConstraint = (id) => {
+    setConstraints(prev => prev.filter(c => c.id !== id));
+    setGeneratedTeams([]);
+  };
+
+  // 5. MODIFICATION de la Sauvegarde
   const handleSaveAndGenerate = async () => {
     setLoading(true);
     try {
-      // Étape A: Mettre à jour l'événement
       const joueurs_presents_data = Array.from(presentPlayersMap.entries()).map(([id, note]) => ({
         joueur_id: id,
-        note_temporaire: note, // C'est cette note qui sera utilisée pour l'équilibrage
+        note_temporaire: note,
+      }));
+      
+      // Préparer les contraintes pour l'API
+      const contraintes_affinite_data = constraints.map(c => ({
+        type: c.type,
+        joueurs: c.joueurs
       }));
       
       await updateEvent(eventId, {
         joueurs_presents: joueurs_presents_data,
-        contraintes_affinite: [] // (On gère pas encore)
+        contraintes_affinite: contraintes_affinite_data // On envoie les contraintes
       });
-      toast.success('Liste des présents sauvegardée ! Lancement de la génération...');
+      toast.success('Liste des présents et contraintes sauvegardées ! Lancement...');
       
-      // Étape B: Appeler la génération
       const response = await generateTeams(eventId);
       setGeneratedTeams(response.data.equipes);
       setWarningMessage(response.data.warning_message);
@@ -170,7 +194,7 @@ export default function EventManagePage() {
   
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+      {/* Header (inchangé) */}
       <header className="bg-white shadow-sm border-b sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
@@ -181,7 +205,7 @@ export default function EventManagePage() {
               <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>
                 {event?.nom_evenement}
               </h1>
-              <p className="text-sm text-gray-500">{presentPlayers.length} joueurs présents | {event?.nombre_equipes} équipes</p>
+              <p className="text-sm text-gray-500">{presentPlayers.length} joueurs présents | {event?.nombre_equipes} équipes | {constraints.length} contraintes</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -198,6 +222,23 @@ export default function EventManagePage() {
         
         {/* Colonne 1: Listes des Joueurs */}
         <div className="space-y-8">
+          
+          {/* NOUVELLE Card: Contraintes */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Contraintes d'Affinité</CardTitle>
+              <CardDescription>Forcez 2 joueurs à être ensemble ou séparez-les.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AffinityManager
+                players={presentPlayers}
+                constraints={constraints}
+                onAdd={addConstraint}
+                onRemove={removeConstraint}
+              />
+            </CardContent>
+          </Card>
+
           {/* Joueurs Présents */}
           <Card>
             <CardHeader>
@@ -231,7 +272,7 @@ export default function EventManagePage() {
           </Card>
         </div>
 
-        {/* Colonne 2: Équipes Générées */}
+        {/* Colonne 2: Équipes Générées (inchangée) */}
         <div className="space-y-8">
           <Card className="sticky top-[120px]">
             <CardHeader>
@@ -244,7 +285,6 @@ export default function EventManagePage() {
                   <span className="text-sm">{warningMessage}</span>
                 </div>
               )}
-              
               {generatedTeams.length === 0 ? (
                 <p className="text-center text-gray-500 py-8">
                   Cliquez sur "Générer les Équipes" une fois vos joueurs présents sélectionnés.
@@ -278,7 +318,7 @@ export default function EventManagePage() {
   );
 }
 
-// Composant réutilisable pour les listes de joueurs (MODIFIÉ)
+// Composant Table (inchangé)
 function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }) {
   return (
     <div className="max-h-96 overflow-y-auto border rounded-lg">
@@ -305,7 +345,7 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
                 <TableCell>
                   <div className="flex items-center gap-1 font-bold">
                     <Star className="w-4 h-4 text-yellow-400" />
-                    {player.note_generale} {/* Affiche le "Général" */}
+                    {player.note_generale}
                   </div>
                 </TableCell>
                 {onNoteChange && (
@@ -316,7 +356,6 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
                       max="10"
                       step="0.5"
                       className="w-20 h-8"
-                      // Affiche la note temporaire, ou le général si pas encore modifié
                       value={notes.get(player.id) || ''}
                       placeholder={String(player.note_generale)}
                       onChange={(e) => onNoteChange(player.id, e.target.value)}
@@ -333,6 +372,81 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
           )}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+// NOUVEAU composant pour gérer les affinités
+function AffinityManager({ players, constraints, onAdd, onRemove }) {
+  const [player1, setPlayer1] = useState('');
+  const [player2, setPlayer2] = useState('');
+
+  // Pour afficher le nom du joueur dans la liste des contraintes
+  const getPlayerName = (id) => allPlayers.find(p => p.id === id)?.nom || '???';
+  
+  // (Note: on utilise 'players' qui est la liste des présents)
+  const allPlayers = players; 
+
+  const handleAdd = (type) => {
+    onAdd(type, player1, player2);
+    setPlayer1('');
+    setPlayer2('');
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Formulaire d'ajout */}
+      <div className="flex flex-col md:flex-row gap-2">
+        <Select value={player1} onValueChange={setPlayer1}>
+          <SelectTrigger><SelectValue placeholder="Joueur 1" /></SelectTrigger>
+          <SelectContent>
+            {players.map(p => <SelectItem key={p.id} value={p.id}>{p.nom}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        
+        <Select value={player2} onValueChange={setPlayer2}>
+          <SelectTrigger><SelectValue placeholder="Joueur 2" /></SelectTrigger>
+          <SelectContent>
+            {players.map(p => <SelectItem key={p.id} value={p.id}>{p.nom}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        
+        <div className="flex gap-2">
+          <Button onClick={() => handleAdd('lier')} className="bg-green-600 hover:bg-green-700 flex-1">
+            <Link className="w-4 h-4" />
+          </Button>
+          <Button onClick={() => handleAdd('separer')} className="bg-red-600 hover:bg-red-700 flex-1">
+            <Link2Off className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+      
+      {/* Liste des contraintes actuelles */}
+      <div className="space-y-2">
+        <Label>Contraintes Actives</Label>
+        {constraints.length === 0 ? (
+          <p className="text-sm text-gray-500">Aucune contrainte pour ce match.</p>
+        ) : (
+          <ul className="space-y-1">
+            {constraints.map(c => (
+              <li key={c.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                <div className="flex items-center gap-2">
+                  {c.type === 'lier' ? 
+                    <Link className="w-4 h-4 text-green-600" /> : 
+                    <Link2Off className="w-4 h-4 text-red-600" />
+                  }
+                  <span className="text-sm font-medium">{getPlayerName(c.joueurs[0])}</span>
+                  <span className="text-sm text-gray-500">{c.type === 'lier' ? 'avec' : 'sans'}</span>
+                  <span className="text-sm font-medium">{getPlayerName(c.joueurs[1])}</span>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => onRemove(c.id)}>
+                  <Trash2 className="w-4 h-4 text-gray-500" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
