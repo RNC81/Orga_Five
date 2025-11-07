@@ -39,14 +39,8 @@ security = HTTPBearer()
 # ============= NOUVELLE FONCTION DE CALCUL DU GÉNÉRAL =============
 
 def calculate_general(player_data: dict) -> float:
-    """
-    Calcule la note "Générale" d'un joueur en fonction de ses attributs
-    et de son poste (Gardien ou Joueur de champ).
-    """
     postes = player_data.get('postes', [])
     is_gardien = any(p.lower() == 'gardien' for p in postes)
-    
-    # Valeurs par défaut pour éviter les erreurs
     attrs = {
         'vitesse': player_data.get('vitesse', 5.0),
         'technique': player_data.get('technique', 5.0),
@@ -58,9 +52,7 @@ def calculate_general(player_data: dict) -> float:
         'plongeon_gk': player_data.get('plongeon_gk', 1.0),
         'jeu_au_pied_gk': player_data.get('jeu_au_pied_gk', 1.0),
     }
-
     if is_gardien:
-        # Formule pondérée pour Gardien (selon notre accord)
         note = (
             attrs['reflexes_gk'] * 0.20 +
             attrs['plongeon_gk'] * 0.20 +
@@ -73,7 +65,6 @@ def calculate_general(player_data: dict) -> float:
             attrs['tir'] * 0.05
         )
     else:
-        # Moyenne simple pour Joueur de Champ (selon notre accord)
         note = (
             attrs['vitesse'] +
             attrs['technique'] +
@@ -82,8 +73,7 @@ def calculate_general(player_data: dict) -> float:
             attrs['defense'] +
             attrs['physique']
         ) / 6
-    
-    return round(note, 2) # Arrondi à 2 décimales
+    return round(note, 2)
 
 # ============= MODELS =============
 
@@ -129,31 +119,22 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: UserResponse
 
-# === MODÈLES PLAYER MODIFIÉS ===
-
-# Modèle de base avec tous les attributs (ce qui sera dans la DB)
 class PlayerBase(BaseModel):
     nom: str
     postes: List[str]
-    
-    # 6 Attributs de base
     vitesse: float = Field(default=5.0, ge=1, le=10)
     technique: float = Field(default=5.0, ge=1, le=10)
     tir: float = Field(default=5.0, ge=1, le=10)
     passe: float = Field(default=5.0, ge=1, le=10)
     defense: float = Field(default=5.0, ge=1, le=10)
     physique: float = Field(default=5.0, ge=1, le=10)
-
-    # 3 Attributs GK (optionnels, défaut à 1.0)
     reflexes_gk: float = Field(default=1.0, ge=1, le=10)
     plongeon_gk: float = Field(default=1.0, ge=1, le=10)
     jeu_au_pied_gk: float = Field(default=1.0, ge=1, le=10)
 
-# Modèle pour la CRÉATION (ce qu'on reçoit de l'API)
 class PlayerCreate(PlayerBase):
-    pass # Hérite de tous les champs de PlayerBase
+    pass
 
-# Modèle pour la MISE A JOUR (tous les champs sont optionnels)
 class PlayerUpdate(BaseModel):
     nom: Optional[str] = None
     postes: Optional[List[str]] = None
@@ -167,23 +148,15 @@ class PlayerUpdate(BaseModel):
     plongeon_gk: Optional[float] = Field(None, ge=1, le=10)
     jeu_au_pied_gk: Optional[float] = Field(None, ge=1, le=10)
 
-# Modèle pour la DB (inclut l'ID et le "Général" calculé)
 class PlayerInDB(PlayerBase):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    note_generale: float # Le "Général" calculé
-    
-# Modèle pour la RÉPONSE API (ce qu'on renvoie au frontend)
-# C'est PlayerInDB qui est renvoyé, il contient tout.
-
-# === MODÈLES EVENT (Inchangé) ===
-# L'algorithme se base sur `note_temporaire`, qui est le "Général"
-# que le frontend nous enverra. Donc rien à changer ici.
+    note_generale: float
 
 class JoueurPresent(BaseModel):
     joueur_id: str
-    note_temporaire: float = Field(ge=1, le=10) # Contiendra le "Général" (ou l'override)
+    note_temporaire: float = Field(ge=1, le=10)
 
 class ContrainteAffinite(BaseModel):
     type: str
@@ -366,7 +339,8 @@ async def cron_regenerate_code(secret: str = Body(..., embed=True)):
     return {"message": "Nouveau code généré avec succès"}
 
 
-# ============= PLAYERS ROUTES (MODIFIÉ) =============
+# ============= PLAYERS ROUTES (Inchangé) =============
+# (La logique de création/MAJ avec les attributs est déjà correcte)
 
 @api_router.get("/players", response_model=List[PlayerInDB])
 async def get_players(current_user: UserResponse = Depends(get_current_user)):
@@ -379,15 +353,8 @@ async def get_players(current_user: UserResponse = Depends(get_current_user)):
 @api_router.post("/players", response_model=PlayerInDB)
 async def create_player(player_data: PlayerCreate, current_user: UserResponse = Depends(get_current_user)):
     player_dict = player_data.model_dump()
-    
-    # Calculer le général
     note_generale = calculate_general(player_dict)
-    
-    player = PlayerInDB(
-        **player_dict,
-        note_generale=note_generale
-    )
-    
+    player = PlayerInDB(**player_dict, note_generale=note_generale)
     db_player_dict = player.model_dump()
     db_player_dict['created_at'] = db_player_dict['created_at'].isoformat()
     await db.players.insert_one(db_player_dict)
@@ -398,25 +365,16 @@ async def update_player(player_id: str, player_update: PlayerUpdate, current_use
     player_doc = await db.players.find_one({"id": player_id}, {"_id": 0})
     if not player_doc:
         raise HTTPException(status_code=404, detail="Joueur non trouvé")
-    
-    # Récupère les champs qui sont activement envoyés pour la mise à jour
     update_data = player_update.model_dump(exclude_unset=True)
-    
-    # Crée une version fusionnée des données pour le recalcul
     updated_doc_data = {**player_doc, **update_data}
-    
-    # Recalculer le général
     note_generale = calculate_general(updated_doc_data)
     update_data['note_generale'] = note_generale
-    
     if update_data:
         await db.players.update_one({"id": player_id}, {"$set": update_data})
-    
     updated_doc = await db.players.find_one({"id": player_id}, {"_id": 0})
     if isinstance(updated_doc.get('created_at'), str):
         updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
     return PlayerInDB(**updated_doc)
-
 
 @api_router.delete("/players/{player_id}")
 async def delete_player(player_id: str, current_user: UserResponse = Depends(get_admin_user)):
@@ -425,98 +383,97 @@ async def delete_player(player_id: str, current_user: UserResponse = Depends(get
         raise HTTPException(status_code=404, detail="Joueur non trouvé")
     return {"message": "Joueur supprimé avec succès"}
 
-# ============= EVENTS ROUTES (Inchangé) =============
-# L'algorithme se base sur `note_temporaire`, qui est le "Général"
-# que le frontend nous enverra. Donc rien à changer ici.
+# ============= EVENTS ROUTES (MODIFIÉES) =============
 
+### MODIFIÉ ###
 @api_router.get("/events", response_model=List[Event])
 async def get_events(current_user: UserResponse = Depends(get_current_user)):
-    query = {}
-    if current_user.role != "admin":
-        query = {"organisateur_id": current_user.id}
-    events = await db.events.find(query, {"_id": 0}).to_list(1000)
+    # Tous les utilisateurs connectés (admin ou invité) voient TOUS les matchs.
+    query = {} 
+    events = await db.events.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
     for event in events:
         if isinstance(event.get('created_at'), str):
             event['created_at'] = datetime.fromisoformat(event['created_at'])
     return events
 
+### MODIFIÉ ###
 @api_router.get("/events/{event_id}", response_model=Event)
 async def get_event(event_id: str, current_user: UserResponse = Depends(get_current_user)):
+    # N'importe quel utilisateur connecté peut voir n'importe quel match
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
-    event = Event(**event_doc)
-    if current_user.role != "admin" and event.organisateur_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Accès refusé")
+    
     if isinstance(event_doc.get('created_at'), str):
         event_doc['created_at'] = datetime.fromisoformat(event_doc['created_at'])
-    return event
+    
+    return event_doc # On peut renvoyer le doc directement car Event hérite de BaseModel
 
 @api_router.post("/events", response_model=Event)
 async def create_event(event_data: EventCreate, current_user: UserResponse = Depends(get_current_user)):
     event = Event(
         **event_data.model_dump(),
-        organisateur_id=current_user.id
+        organisateur_id=current_user.id # On garde la trace de qui a créé
     )
     event_dict = event.model_dump()
     event_dict['created_at'] = event_dict['created_at'].isoformat()
     await db.events.insert_one(event_dict)
     return event
 
+### MODIFIÉ ###
 @api_router.put("/events/{event_id}", response_model=Event)
 async def update_event(event_id: str, event_update: EventUpdate, current_user: UserResponse = Depends(get_current_user)):
+    # N'importe quel utilisateur connecté peut modifier n'importe quel match
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
-    event = Event(**event_doc)
-    if current_user.role != "admin" and event.organisateur_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Accès refusé")
+    
     update_data = {k: v for k, v in event_update.model_dump().items() if v is not None}
     if update_data:
         await db.events.update_one({"id": event_id}, {"$set": update_data})
+    
     updated_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if isinstance(updated_doc.get('created_at'), str):
         updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
     return Event(**updated_doc)
 
+### MODIFIÉ ###
 @api_router.delete("/events/{event_id}")
 async def delete_event(event_id: str, current_user: UserResponse = Depends(get_current_user)):
+    # N'importe quel utilisateur connecté peut supprimer n'importe quel match
+    # (On pourrait changer ça plus tard pour "admin-only" si besoin)
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
-    event = Event(**event_doc)
-    if current_user.role != "admin" and event.organisateur_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Accès refusé")
+    
     await db.events.delete_one({"id": event_id})
     return {"message": "Événement supprimé avec succès"}
 
-# ============= TEAM GENERATION ALGORITHM (Inchangé) =============
-# Il se base sur le `notes_map` (qui vient de `note_temporaire`),
-# donc il équilibrera en fonction du "Général" que le frontend lui enverra.
-# Nous devons juste changer `get_player_details` pour utiliser `PlayerInDB`
-# et `calculate_team_stats` pour utiliser `note_generale` comme fallback.
+# ============= TEAM GENERATION ALGORITHM (MODIFIÉ) =============
 
+# On change la signature pour accepter PlayerInDB
 async def get_player_details(joueur_ids: List[str]) -> Dict[str, PlayerInDB]:
     players = await db.players.find({"id": {"$in": joueur_ids}}, {"_id": 0}).to_list(1000)
     return {p["id"]: PlayerInDB(**p) for p in players}
 
+# On change la signature pour accepter PlayerInDB
 def calculate_team_stats(team: List[str], joueurs_map: Dict[str, PlayerInDB], notes_map: Dict[str, float]) -> Dict:
     total_note = sum(notes_map.get(jid, 0) for jid in team)
     note_moyenne = total_note / len(team) if team else 0
-    
     postes_count = {}
     for jid in team:
         player = joueurs_map.get(jid)
         if player:
             for poste in player.postes:
                 postes_count[poste] = postes_count.get(poste, 0) + 1
-    
     return {
         "note_moyenne": round(note_moyenne, 2),
         "postes": postes_count,
         "total_note": total_note
     }
 
+# (check_constraints est inchangé)
 def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffinite]) -> bool:
     for contrainte in contraintes:
         if contrainte.type == "lier":
@@ -532,20 +489,18 @@ def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffini
                 if len(joueurs_in_team) > 1: return False
     return True
 
+# On change la signature pour accepter PlayerInDB
 def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipes: int, 
                            contraintes: List[ContrainteAffinite], joueurs_map: Dict[str, PlayerInDB]) -> tuple:
     notes_map = {jp.joueur_id: jp.note_temporaire for jp in joueurs_presents}
     joueur_ids = list(notes_map.keys())
     n_joueurs = len(joueur_ids)
-    
     if n_joueurs < nombre_equipes:
         raise ValueError("Pas assez de joueurs pour former le nombre d'équipes demandé")
-    
     best_teams = None
     best_score = float('inf')
     warning_message = None
     max_attempts = 1000
-    
     for attempt in range(max_attempts):
         shuffled = joueur_ids.copy()
         random.shuffle(shuffled)
@@ -557,29 +512,22 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
             team_size = base_size + (1 if i < extra else 0)
             teams.append(shuffled[idx:idx + team_size])
             idx += team_size
-        
         if not check_constraints(teams, contraintes): continue
-        
         team_stats = [calculate_team_stats(team, joueurs_map, notes_map) for team in teams]
         notes_moyennes = [stats["note_moyenne"] for stats in team_stats]
-        
         mean_of_means = sum(notes_moyennes) / len(notes_moyennes)
         variance = sum((nm - mean_of_means) ** 2 for nm in notes_moyennes) / len(notes_moyennes)
         note_score = variance
-        
         poste_score = 0
         all_postes = set()
         for stats in team_stats: all_postes.update(stats["postes"].keys())
-        
         for poste in all_postes:
             poste_counts = [stats["postes"].get(poste, 0) for stats in team_stats]
             if poste_counts:
                 mean_poste = sum(poste_counts) / len(poste_counts)
                 poste_variance = sum((pc - mean_poste) ** 2 for pc in poste_counts) / len(poste_counts)
                 poste_score += poste_variance
-        
         total_score = note_score * 2 + poste_score
-        
         if total_score < best_score:
             best_score = total_score
             best_teams = teams
@@ -587,19 +535,17 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
             min_note = min(notes_moyennes)
             if max_note - min_note > 1.5:
                 warning_message = f"⚠️ Les contraintes d'affinité forcent un déséquilibre : écart de {max_note - min_note:.2f} points."
-    
     if best_teams is None:
         raise ValueError("Impossible de générer des équipes respectant toutes les contraintes")
-    
     return best_teams, warning_message
 
+### MODIFIÉ ###
 @api_router.post("/events/{event_id}/generate", response_model=GenerateTeamsResponse)
 async def generate_teams(event_id: str, current_user: UserResponse = Depends(get_current_user)):
+    # N'importe quel utilisateur connecté peut générer
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc: raise HTTPException(status_code=404, detail="Événement non trouvé")
     event = Event(**event_doc)
-    if current_user.role != "admin" and event.organisateur_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Accès refusé")
     if not event.joueurs_presents:
         raise HTTPException(status_code=400, detail="Aucun joueur présent")
     
@@ -628,7 +574,6 @@ async def generate_teams(event_id: str, current_user: UserResponse = Depends(get
                     joueurs_data.append({
                         "id": jid,
                         "nom": player.nom,
-                        # Renvoie la note qui a été utilisée pour l'équilibrage
                         "note": notes_map.get(jid, player.note_generale),
                         "postes": player.postes
                     })
@@ -641,7 +586,7 @@ async def generate_teams(event_id: str, current_user: UserResponse = Depends(get
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# ============= SHARE LINK (Inchangé) =============
+# ============= SHARE LINK (MODIFIÉ) =============
 @api_router.get("/share/{share_token}")
 async def get_shared_event(share_token: str):
     event_doc = await db.events.find_one({"share_token": share_token}, {"_id": 0})
@@ -682,7 +627,7 @@ async def get_shared_event(share_token: str):
 
 @api_router.get("/")
 async def root():
-    return {"message": "API Générateur d'Équipes de Foot V4 (Attributs)"}
+    return {"message": "API Générateur d'Équipes de Foot V5 (Collaboratif)"}
 
 # Include router
 app.include_router(api_router)
