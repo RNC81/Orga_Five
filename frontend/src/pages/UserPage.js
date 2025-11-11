@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getGuestCode, regenerateGuestCode, getGuestLogs } from '../services/api'; // 1. Importer getGuestLogs
+import { getGuestCode, regenerateGuestCode, getGuestLogs } from '../services/api';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -11,16 +11,16 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../components/ui/table'; // 2. Importer la Table
+} from '../components/ui/table';
 import { toast } from 'sonner';
 import { ArrowLeft, KeyRound, RefreshCw, Copy, History } from 'lucide-react';
-import { format, formatDistanceToNow } from 'date-fns'; // 3. Importer format
+import { format, formatDistanceToNow } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 export default function UserPage() {
   const [code, setCode] = useState(null);
   const [expiresAt, setExpiresAt] = useState(null);
-  const [logs, setLogs] = useState([]); // 4. Nouvel état pour les logs
+  const [logs, setLogs] = useState([]);
   const [loadingCode, setLoadingCode] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(true);
 
@@ -28,7 +28,7 @@ export default function UserPage() {
 
   useEffect(() => {
     fetchCode();
-    fetchLogs(); // 5. Appeler la fonction pour charger les logs
+    fetchLogs();
   }, []);
 
   const fetchCode = async () => {
@@ -45,7 +45,6 @@ export default function UserPage() {
     }
   };
 
-  // 6. Nouvelle fonction pour charger les logs
   const fetchLogs = async () => {
     setLoadingLogs(true);
     try {
@@ -66,7 +65,7 @@ export default function UserPage() {
       setCode(response.data.code);
       setExpiresAt(new Date(response.data.expires_at));
       toast.success('Nouveau code généré !');
-      fetchLogs(); // Rafraîchit aussi les logs (pour voir quel code a été utilisé)
+      fetchLogs();
     } catch (error) {
       toast.error('Erreur lors de la génération du code.');
     } finally {
@@ -97,18 +96,18 @@ export default function UserPage() {
             <Button variant="outline" size="icon" onClick={() => navigate('/dashboard')}>
               <ArrowLeft className="w-4 h-4" />
             </Button>
-            <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>
+            <h1 className="text-xl md:text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>
               Gestion des Invités
             </h1>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8 grid md:grid-cols-3 gap-8">
+      {/* Main Content (MODIFIÉ : md:grid-cols-3 -> md:grid-cols-1 lg:grid-cols-3) */}
+      <main className="max-w-7xl mx-auto px-4 py-8 grid md:grid-cols-1 lg:grid-cols-3 gap-8">
         
-        {/* Colonne 1: Code d'invitation */}
-        <div className="md:col-span-1">
+        {/* Colonne 1: Code d'invitation (MODIFIÉ : md:col-span-1 -> lg:col-span-1) */}
+        <div className="lg:col-span-1">
           <Card>
             <CardHeader>
               <CardTitle>Code Actif</CardTitle>
@@ -143,8 +142,8 @@ export default function UserPage() {
           </Card>
         </div>
 
-        {/* 7. Colonne 2: Historique des connexions */}
-        <div className="md:col-span-2">
+        {/* Colonne 2: Historique (MODIFIÉ : md:col-span-2 -> lg:col-span-2) */}
+        <div className="lg:col-span-2">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -161,27 +160,50 @@ export default function UserPage() {
               ) : logs.length === 0 ? (
                 <p className="text-sm text-gray-500">Aucune connexion d'invité enregistrée pour le moment.</p>
               ) : (
-                <div className="border rounded-lg">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Nom</TableHead>
-                        <TableHead>Code Utilisé</TableHead>
-                        <TableHead>Date</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {logs.map((log) => (
-                        <TableRow key={log.id}>
-                          <TableCell className="font-medium">{log.name}</TableCell>
-                          <TableCell><Badge variant="secondary">{log.code_used}</Badge></TableCell>
-                          <TableCell>
+                <div>
+
+                  {/* ### NOUVEAU : VUE MOBILE (Cartes) ### */}
+                  {/* `md:hidden` = visible sur mobile, caché sur desktop */}
+                  <div className="md:hidden space-y-3">
+                    {logs.map((log) => (
+                      <Card key={log.id} className="p-3">
+                        <CardContent className="p-0">
+                          <h4 className="font-bold">{log.name}</h4>
+                          <p className="text-sm text-gray-600">
                             {format(new Date(log.logged_in_at), 'dd/MM/yyyy à HH:mm', { locale: fr })}
-                          </TableCell>
+                          </p>
+                          <Badge variant="secondary" className="mt-2">Code: {log.code_used}</Badge>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+
+                  {/* ### NOUVEAU : VUE DESKTOP (Tableau) ### */}
+                  {/* `hidden md:block` = caché sur mobile, visible sur desktop */}
+                  <div className="hidden md:block border rounded-lg">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Nom</TableHead>
+                          <TableHead>Code Utilisé</TableHead>
+                          <TableHead>Date</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {logs.map((log) => (
+                          <TableRow key={log.id}>
+                            <TableCell className="font-medium">{log.name}</TableCell>
+                            <TableCell><Badge variant="secondary">{log.code_used}</Badge></TableCell>
+                            <TableCell>
+                              {format(new Date(log.logged_in_at), 'dd/MM/yyyy à HH:mm', { locale: fr })}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  {/* ### FIN DES MODIFICATIONS ### */}
+
                 </div>
               )}
             </CardContent>
