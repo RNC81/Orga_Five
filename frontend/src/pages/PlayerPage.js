@@ -27,14 +27,15 @@ import {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from '../components/ui/tooltip'; // Importation de l'infobulle
+} from '../components/ui/tooltip';
+import { Card, CardContent } from '../components/ui/card'; // On importe Card
 import { toast } from 'sonner';
 import { Plus, Trash2, Edit, ArrowLeft, User, Star, HelpCircle } from 'lucide-react';
 
-// État initial pour un nouveau joueur
+// État initial (inchangé)
 const emptyPlayerState = {
   nom: '',
-  postes: '', // On gère comme une string
+  postes: '',
   vitesse: 5,
   technique: 5,
   tir: 5,
@@ -46,7 +47,7 @@ const emptyPlayerState = {
   jeu_au_pied_gk: 1,
 };
 
-// Descriptions pour les infobulles
+// Descriptions (inchangé)
 const attributeDescriptions = {
   vitesse: "Explosivité et accélération sur les 3-5 premiers mètres.",
   technique: "Dribble, contrôle de balle dans les petits espaces et 1v1.",
@@ -64,12 +65,10 @@ export default function PlayerPage() {
   const [loading, setLoading] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingPlayerId, setEditingPlayerId] = useState(null);
-  
   const [formState, setFormState] = useState(emptyPlayerState);
 
   const navigate = useNavigate();
 
-  // On vérifie si le joueur est gardien en temps réel
   const isGardien = useMemo(() => {
     return formState.postes.toLowerCase().split(',').map(p => p.trim()).includes('gardien');
   }, [formState.postes]);
@@ -97,7 +96,6 @@ export default function PlayerPage() {
 
   const handleOpenForm = (player) => {
     if (player) {
-      // Mode édition
       setEditingPlayerId(player.id);
       setFormState({
         nom: player.nom,
@@ -113,7 +111,6 @@ export default function PlayerPage() {
         jeu_au_pied_gk: player.jeu_au_pied_gk,
       });
     } else {
-      // Mode création
       setEditingPlayerId(null);
       setFormState(emptyPlayerState);
     }
@@ -135,12 +132,7 @@ export default function PlayerPage() {
       toast.error('Veuillez remplir le nom et au moins un poste.');
       return;
     }
-
-    const playerData = {
-      ...formState,
-      postes: postesArray,
-    };
-
+    const playerData = { ...formState, postes: postesArray };
     try {
       if (editingPlayerId) {
         await updatePlayer(editingPlayerId, playerData);
@@ -168,9 +160,9 @@ export default function PlayerPage() {
   };
 
   return (
-    <TooltipProvider> {/* Nécessaire pour les infobulles */}
+    <TooltipProvider>
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+      {/* Header (inchangé) */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
@@ -188,19 +180,17 @@ export default function PlayerPage() {
                 Ajouter un joueur
               </Button>
             </DialogTrigger>
+            {/* Dialog (inchangé, on garde la classe 'max-w-md md:max-w-3xl' de l'étape 15) */}
             <DialogContent className="max-w-md md:max-w-3xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={() => resetForm()}>
               <DialogHeader>
                 <DialogTitle>{editingPlayerId ? 'Modifier le joueur' : 'Ajouter un nouveau joueur'}</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="max-h-[80vh] overflow-y-auto pr-4">
                 <div className="space-y-4">
-                  {/* Infos de base */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <AttributeInput name="nom" label="Nom du joueur" value={formState.nom} onChange={handleFormChange} placeholder="Ex: Zinedine Zidane" isText />
                     <AttributeInput name="postes" label="Postes" value={formState.postes} onChange={handleFormChange} description="Ex: Milieu, Attaquant (séparés par une virgule)" placeholder="Gardien, Défenseur, Milieu, Attaquant" isText />
                   </div>
-                  
-                  {/* Attributs de champ */}
                   <h3 className="font-medium text-lg pt-2">Attributs de Joueur</h3>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <AttributeInput name="vitesse" label="Vitesse" value={formState.vitesse} onChange={handleFormChange} description={attributeDescriptions.vitesse} />
@@ -210,8 +200,6 @@ export default function PlayerPage() {
                     <AttributeInput name="defense" label="Défense" value={formState.defense} onChange={handleFormChange} description={attributeDescriptions.defense} />
                     <AttributeInput name="physique" label="Physique" value={formState.physique} onChange={handleFormChange} description={attributeDescriptions.physique} />
                   </div>
-
-                  {/* Attributs de gardien (conditionnels) */}
                   {isGardien && (
                     <>
                       <h3 className="font-medium text-lg pt-2 text-blue-600">Attributs de Gardien</h3>
@@ -223,7 +211,6 @@ export default function PlayerPage() {
                     </>
                   )}
                 </div>
-                
                 <DialogFooter className="pt-6 sticky bottom-0 bg-white">
                   <DialogClose asChild>
                     <Button type="button" variant="outline" onClick={resetForm}>Annuler</Button>
@@ -251,45 +238,83 @@ export default function PlayerPage() {
             </Button>
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nom</TableHead>
-                  <TableHead>Général</TableHead> {/* MODIFIÉ */}
-                  <TableHead>Postes</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {players.map((player) => (
-                  <TableRow key={player.id}>
-                    <TableCell className="font-medium">{player.nom}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 font-bold">
-                        <Star className="w-4 h-4 text-yellow-400" />
-                        {player.note_generale} {/* MODIFIÉ */}
+          <div className="bg-white rounded-lg shadow">
+            
+            {/* ### NOUVEAU : VUE MOBILE (Cartes) ### */}
+            {/* `md:hidden` = visible sur mobile, caché sur desktop */}
+            <div className="md:hidden space-y-3 p-3">
+              {players.map((player) => (
+                <Card key={player.id} className="p-4">
+                  <CardContent className="p-0">
+                    <div className="flex justify-between items-center mb-2">
+                      <h3 className="text-lg font-bold">{player.nom}</h3>
+                      <div className="flex">
+                        <Button variant="ghost" size="icon" onClick={() => handleOpenForm(player)}>
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(player.id)}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {player.postes.map((poste) => (
-                          <Badge key={poste} variant={poste.toLowerCase() === 'gardien' ? 'default' : 'secondary'}>{poste}</Badge>
-                        ))}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" onClick={() => handleOpenForm(player)}>
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(player.id)}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </TableCell>
+                    </div>
+                    <div className="flex items-center gap-1 font-bold mb-2">
+                      <Star className="w-4 h-4 text-yellow-400" />
+                      Général: {player.note_generale}
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {player.postes.map((poste) => (
+                        <Badge key={poste} variant={poste.toLowerCase() === 'gardien' ? 'default' : 'secondary'}>{poste}</Badge>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            
+            {/* ### NOUVEAU : VUE DESKTOP (Tableau) ### */}
+            {/* `hidden md:block` = caché sur mobile, visible sur desktop */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Nom</TableHead>
+                    <TableHead>Général</TableHead>
+                    <TableHead>Postes</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {players.map((player) => (
+                    <TableRow key={player.id}>
+                      <TableCell className="font-medium">{player.nom}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 font-bold">
+                          <Star className="w-4 h-4 text-yellow-400" />
+                          {player.note_generale}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {player.postes.map((poste) => (
+                            <Badge key={poste} variant={poste.toLowerCase() === 'gardien' ? 'default' : 'secondary'}>{poste}</Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="ghost" size="icon" onClick={() => handleOpenForm(player)}>
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(player.id)}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {/* ### FIN DES MODIFICATIONS ### */}
+            
           </div>
         )}
       </main>
@@ -298,7 +323,7 @@ export default function PlayerPage() {
   );
 }
 
-// Composant helper pour un champ de formulaire avec infobulle
+// Composant helper (inchangé)
 function AttributeInput({ name, label, value, onChange, description, isText = false, placeholder = "" }) {
   return (
     <div className="space-y-2">
