@@ -188,7 +188,7 @@ export default function PlayerPage() {
                 Ajouter un joueur
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-3xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={() => resetForm()}>
+            <DialogContent className="max-w-md md:max-w-3xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={() => resetForm()}>
               <DialogHeader>
                 <DialogTitle>{editingPlayerId ? 'Modifier le joueur' : 'Ajouter un nouveau joueur'}</DialogTitle>
               </DialogHeader>

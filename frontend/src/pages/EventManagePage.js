@@ -219,7 +219,7 @@ export default function EventManagePage() {
       </header>
 
       {/* Main Content (2 colonnes) */}
-      <main className="max-w-7xl mx-auto px-4 py-8 grid lg:grid-cols-2 gap-8">
+      <main className="max-w-7xl mx-auto px-4 py-8 grid md:grid-cols-2 gap-8">
         
         {/* Colonne 1: Listes des Joueurs */}
         <div className="space-y-8">

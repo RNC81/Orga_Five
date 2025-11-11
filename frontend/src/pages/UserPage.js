@@ -161,7 +161,7 @@ export default function UserPage() {
               ) : logs.length === 0 ? (
                 <p className="text-sm text-gray-500">Aucune connexion d'invité enregistrée pour le moment.</p>
               ) : (
-                <div className="border rounded-lg overflow-hidden">
+                <div className="border rounded-lg">
                   <Table>
                     <TableHeader>
                       <TableRow>
