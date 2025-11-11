@@ -22,7 +22,8 @@ export default function Dashboard() {
   const fetchEvents = async () => {
     try {
       const response = await getEvents();
-      setEvents(response.data);
+      // On trie les événements du plus récent au plus ancien
+      setEvents(response.data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
     } catch (error) {
       toast.error('Erreur lors du chargement des événements');
     } finally {
@@ -36,7 +37,7 @@ export default function Dashboard() {
     try {
       await deleteEvent(eventId);
       toast.success('Événement supprimé');
-      fetchEvents();
+      fetchEvents(); // Rafraîchit la liste
     } catch (error) {
       toast.error('Erreur lors de la suppression');
     }
@@ -44,26 +45,42 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen" style={{ background: 'linear-gradient(to bottom, #f0fdf4, #dbeafe)' }}>
-      {/* Header */}
+      
+      {/* ### HEADER MODIFIÉ ### */}
       <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+        {/*
+          MODIFICATIONS :
+          - flex-col md:flex-row : Empile verticalement sur mobile, horizontalement sur ordinateur
+          - items-start md:items-center : Aligne à gauche sur mobile, au centre sur ordinateur
+          - gap-4 : Ajoute de l'espace quand c'est empilé
+        */}
+        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          
+          {/* Logo (inchangé) */}
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #10b981 0%, #3b82f6 100%)' }}>
               <Users className="w-6 h-6 text-white" />
             </div>
             <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>FutTeams</h1>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-600">{user?.email}</span>
+          
+          {/*
+            MODIFICATIONS :
+            - flex-col sm:flex-row : Empile les boutons verticalement sur petit écran, horizontalement sur + grand
+            - items-stretch sm:items-center : Les boutons prennent toute la largeur sur petit écran
+            - w-full md:w-auto : Prend toute la largeur sur mobile, taille auto sur ordinateur
+          */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+            <span className="text-sm text-gray-600 px-2 py-2 text-center sm:text-left">{user?.email}</span>
             {user?.role === 'admin' && (
               <Button variant="outline" onClick={() => navigate('/users')} data-testid="manage-users-button">
                 <UserCog className="w-4 h-4 mr-2" />
-                Gérer les utilisateurs
+                Gérer les Invités
               </Button>
             )}
             <Button variant="outline" onClick={() => navigate('/players')} data-testid="manage-players-button">
               <Users className="w-4 h-4 mr-2" />
-              Gérer les joueurs
+              Gérer les Joueurs
             </Button>
             <Button variant="ghost" onClick={logout} data-testid="logout-button">
               <LogOut className="w-4 h-4 mr-2" />
@@ -72,10 +89,12 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+      {/* ### FIN DES MODIFICATIONS DU HEADER ### */}
 
-      {/* Main Content */}
+
+      {/* Main Content (inchangé, il était déjà responsive) */}
       <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="flex justify-between items-center mb-8">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
           <div>
             <h2 className="text-4xl font-bold mb-2" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>Mes Matchs</h2>
             <p className="text-gray-600" style={{ fontFamily: 'Inter, sans-serif' }}>Créez et gérez vos événements de football</p>
@@ -84,7 +103,7 @@ export default function Dashboard() {
             onClick={() => navigate('/events/create')} 
             size="lg"
             data-testid="create-match-button"
-            className="shadow-lg"
+            className="shadow-lg w-full sm:w-auto"
             style={{ background: 'linear-gradient(135deg, #10b981 0%, #3b82f6 100%)' }}
           >
             <Plus className="w-5 h-5 mr-2" />
@@ -140,7 +159,7 @@ export default function Dashboard() {
                       data-testid={`view-event-${event.id}`}
                     >
                       <Eye className="w-4 h-4 mr-1" />
-                      Voir
+                      Gérer
                     </Button>
                     <Button 
                       variant="destructive" 
