@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Body
+# On importe Response et status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Body, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -37,7 +38,6 @@ api_router = APIRouter(prefix="/api")
 security = HTTPBearer()
 
 # ============= NOUVELLE FONCTION DE CALCUL DU GÉNÉRAL =============
-
 def calculate_general(player_data: dict) -> float:
     postes = player_data.get('postes', [])
     is_gardien = any(p.lower() == 'gardien' for p in postes)
@@ -75,8 +75,7 @@ def calculate_general(player_data: dict) -> float:
         ) / 6
     return round(note, 2)
 
-# ============= MODELS =============
-
+# ============= MODELS (Inchangé) =============
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -84,41 +83,33 @@ class User(BaseModel):
     password_hash: str
     role: str = "admin"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
-
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
-
 class UserResponse(BaseModel):
     id: str
     email: str
     role: str
-
 class GuestLogin(BaseModel):
     name: str = Field(..., min_length=2)
     code: str = Field(..., min_length=6)
-
 class GuestCode(BaseModel):
     id: str = Field(default="singleton")
     code: str
     expires_at: datetime
-
 class GuestLogResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
     code_used: str
     logged_in_at: datetime
-
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
-
 class PlayerBase(BaseModel):
     nom: str
     postes: List[str]
@@ -131,10 +122,8 @@ class PlayerBase(BaseModel):
     reflexes_gk: float = Field(default=1.0, ge=1, le=10)
     plongeon_gk: float = Field(default=1.0, ge=1, le=10)
     jeu_au_pied_gk: float = Field(default=1.0, ge=1, le=10)
-
 class PlayerCreate(PlayerBase):
     pass
-
 class PlayerUpdate(BaseModel):
     nom: Optional[str] = None
     postes: Optional[List[str]] = None
@@ -147,21 +136,17 @@ class PlayerUpdate(BaseModel):
     reflexes_gk: Optional[float] = Field(None, ge=1, le=10)
     plongeon_gk: Optional[float] = Field(None, ge=1, le=10)
     jeu_au_pied_gk: Optional[float] = Field(None, ge=1, le=10)
-
 class PlayerInDB(PlayerBase):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     note_generale: float
-
 class JoueurPresent(BaseModel):
     joueur_id: str
     note_temporaire: float = Field(ge=1, le=10)
-
 class ContrainteAffinite(BaseModel):
     type: str
     joueurs: List[str]
-
 class Event(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -174,37 +159,30 @@ class Event(BaseModel):
     share_token: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     warning_message: Optional[str] = None
-
 class EventCreate(BaseModel):
     nom_evenement: str
     joueurs_presents: List[JoueurPresent] = []
     nombre_equipes: int = 2
     contraintes_affinite: List[ContrainteAffinite] = []
-
 class EventUpdate(BaseModel):
     nom_evenement: Optional[str] = None
     joueurs_presents: Optional[List[JoueurPresent]] = None
     nombre_equipes: Optional[int] = None
     contraintes_affinite: Optional[List[ContrainteAffinite]] = None
     equipes_generees: Optional[List[List[str]]] = None
-
 class TeamStats(BaseModel):
     note_moyenne: float
     postes: Dict[str, int]
     joueurs: List[Dict[str, Any]]
-
 class GenerateTeamsResponse(BaseModel):
     equipes: List[TeamStats]
     warning_message: Optional[str] = None
 
 # ============= AUTH HELPERS (Inchangé) =============
-
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
-
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
@@ -215,7 +193,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     if "role" not in to_encode: to_encode["role"] = "co-organisateur"
     if "name" not in to_encode and "email" in to_encode: to_encode["name"] = to_encode["email"]
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserResponse:
     try:
         token = credentials.credentials
@@ -234,14 +211,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if role == "co-organisateur" and name:
         return UserResponse(id=user_id, email=name, role=role)
     raise HTTPException(status_code=401, detail="Utilisateur non trouvé")
-
 async def get_admin_user(current_user: UserResponse = Depends(get_current_user)) -> UserResponse:
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
     return current_user
 
 # ============= AUTH ROUTES (Inchangé) =============
-
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
     user_count = await db.users.count_documents({})
@@ -254,7 +229,6 @@ async def register(user_data: UserCreate):
     await db.users.insert_one(user_dict)
     access_token = create_access_token(data={"sub": user.id, "role": user.role, "name": user.email})
     return TokenResponse(access_token=access_token, user=UserResponse(id=user.id, email=user.email, role=user.role))
-
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     user_doc = await db.users.find_one({"email": credentials.email}, {"_id": 0})
@@ -264,7 +238,6 @@ async def login(credentials: UserLogin):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     access_token = create_access_token(data={"sub": user.id, "role": user.role, "name": user.email})
     return TokenResponse(access_token=access_token, user=UserResponse(id=user.id, email=user.email, role=user.role))
-
 @api_router.post("/auth/guest-login", response_model=TokenResponse)
 async def guest_login(credentials: GuestLogin):
     code_doc = await db.guest_codes.find_one({"id": "singleton"}, {"_id": 0})
@@ -284,18 +257,40 @@ async def guest_login(credentials: GuestLogin):
     guest_role = "co-organisateur"
     access_token = create_access_token(data={"sub": guest_id, "role": guest_role, "name": credentials.name})
     return TokenResponse(access_token=access_token, user=UserResponse(id=guest_id, email=credentials.name, role=guest_role))
-
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: UserResponse = Depends(get_current_user)):
     return current_user
 
-# ============= GUEST CODE (Admin only) (Inchangé) =============
+# ============= GUEST CODE (Admin only) (MODIFIÉ) =============
 
+### MODIFIÉ ###
 async def generate_new_guest_code() -> GuestCode:
+    """
+    Génère un nouveau code de 6 caractères et calcule la date d'expiration
+    pour le prochain Lundi à 8h00 UTC.
+    """
     alphabet = string.ascii_uppercase + string.digits
     code = ''.join(secrets.choice(alphabet) for i in range(6))
-    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    
+    # Nouvelle logique d'expiration
+    now = datetime.now(timezone.utc)
+    
+    # weekday() -> Lundi=0, Dimanche=6
+    days_until_monday = (0 - now.weekday() + 7) % 7
+    
+    if days_until_monday == 0 and now.hour >= 8: # Si on est Lundi APRES 8h
+         days_until_monday = 7 # On vise Lundi prochain
+    elif days_until_monday == 0 and now.hour < 8: # Si on est Lundi AVANT 8h
+         days_until_monday = 0 # On vise Aujourd'hui 8h (le cron n'a pas encore tourné)
+
+    # Calcule la date
+    if days_until_monday == 0:
+        expires_at = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    else:
+        expires_at = (now + timedelta(days=days_until_monday)).replace(hour=8, minute=0, second=0, microsecond=0)
+
     code_data = GuestCode(code=code, expires_at=expires_at)
+    
     await db.guest_codes.update_one(
         {"id": "singleton"},
         {"$set": {"code": code_data.code, "expires_at": code_data.expires_at.isoformat()}},
@@ -305,8 +300,10 @@ async def generate_new_guest_code() -> GuestCode:
 
 async def get_or_create_guest_code() -> GuestCode:
     code_doc = await db.guest_codes.find_one({"id": "singleton"}, {"_id": 0})
+    
     if not code_doc or datetime.now(timezone.utc) > datetime.fromisoformat(code_doc["expires_at"]):
         return await generate_new_guest_code()
+        
     return GuestCode(code=code_doc["code"], expires_at=datetime.fromisoformat(code_doc["expires_at"]))
 
 @api_router.get("/admin/guest-code", response_model=GuestCode)
@@ -329,19 +326,21 @@ async def get_guest_logs(current_user: UserResponse = Depends(get_admin_user)):
     return [GuestLogResponse(**log) for log in logs]
 
 
-# ============= CRON JOB ROUTE (Secret) (Inchangé) =============
+# ============= CRON JOB ROUTE (Secret) (MODIFIÉ) =============
 
+### MODIFIÉ ###
 @api_router.post("/cron/regenerate-code")
 async def cron_regenerate_code(secret: str = Body(..., embed=True)):
     if secret != CRON_SECRET:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
+    
     await generate_new_guest_code()
-    return {"message": "Nouveau code généré avec succès"}
+    
+    # Renvoie un 204 No Content pour ne pas avoir de "sortie trop grande"
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ============= PLAYERS ROUTES (Inchangé) =============
-# (La logique de création/MAJ avec les attributs est déjà correcte)
-
 @api_router.get("/players", response_model=List[PlayerInDB])
 async def get_players(current_user: UserResponse = Depends(get_current_user)):
     players = await db.players.find({}, {"_id": 0}).to_list(1000)
@@ -349,7 +348,6 @@ async def get_players(current_user: UserResponse = Depends(get_current_user)):
         if isinstance(player.get('created_at'), str):
             player['created_at'] = datetime.fromisoformat(player['created_at'])
     return players
-
 @api_router.post("/players", response_model=PlayerInDB)
 async def create_player(player_data: PlayerCreate, current_user: UserResponse = Depends(get_current_user)):
     player_dict = player_data.model_dump()
@@ -359,7 +357,6 @@ async def create_player(player_data: PlayerCreate, current_user: UserResponse = 
     db_player_dict['created_at'] = db_player_dict['created_at'].isoformat()
     await db.players.insert_one(db_player_dict)
     return player
-
 @api_router.put("/players/{player_id}", response_model=PlayerInDB)
 async def update_player(player_id: str, player_update: PlayerUpdate, current_user: UserResponse = Depends(get_current_user)):
     player_doc = await db.players.find_one({"id": player_id}, {"_id": 0})
@@ -375,7 +372,6 @@ async def update_player(player_id: str, player_update: PlayerUpdate, current_use
     if isinstance(updated_doc.get('created_at'), str):
         updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
     return PlayerInDB(**updated_doc)
-
 @api_router.delete("/players/{player_id}")
 async def delete_player(player_id: str, current_user: UserResponse = Depends(get_admin_user)):
     result = await db.players.delete_one({"id": player_id})
@@ -383,81 +379,54 @@ async def delete_player(player_id: str, current_user: UserResponse = Depends(get
         raise HTTPException(status_code=404, detail="Joueur non trouvé")
     return {"message": "Joueur supprimé avec succès"}
 
-# ============= EVENTS ROUTES (MODIFIÉES) =============
-
-### MODIFIÉ ###
+# ============= EVENTS ROUTES (Inchangé - collaboratif) =============
 @api_router.get("/events", response_model=List[Event])
 async def get_events(current_user: UserResponse = Depends(get_current_user)):
-    # Tous les utilisateurs connectés (admin ou invité) voient TOUS les matchs.
     query = {} 
     events = await db.events.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    
     for event in events:
         if isinstance(event.get('created_at'), str):
             event['created_at'] = datetime.fromisoformat(event['created_at'])
     return events
-
-### MODIFIÉ ###
 @api_router.get("/events/{event_id}", response_model=Event)
 async def get_event(event_id: str, current_user: UserResponse = Depends(get_current_user)):
-    # N'importe quel utilisateur connecté peut voir n'importe quel match
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
-    
     if isinstance(event_doc.get('created_at'), str):
         event_doc['created_at'] = datetime.fromisoformat(event_doc['created_at'])
-    
-    return event_doc # On peut renvoyer le doc directement car Event hérite de BaseModel
-
+    return event_doc
 @api_router.post("/events", response_model=Event)
 async def create_event(event_data: EventCreate, current_user: UserResponse = Depends(get_current_user)):
-    event = Event(
-        **event_data.model_dump(),
-        organisateur_id=current_user.id # On garde la trace de qui a créé
-    )
+    event = Event(**event_data.model_dump(), organisateur_id=current_user.id)
     event_dict = event.model_dump()
     event_dict['created_at'] = event_dict['created_at'].isoformat()
     await db.events.insert_one(event_dict)
     return event
-
-### MODIFIÉ ###
 @api_router.put("/events/{event_id}", response_model=Event)
 async def update_event(event_id: str, event_update: EventUpdate, current_user: UserResponse = Depends(get_current_user)):
-    # N'importe quel utilisateur connecté peut modifier n'importe quel match
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
-    
     update_data = {k: v for k, v in event_update.model_dump().items() if v is not None}
     if update_data:
         await db.events.update_one({"id": event_id}, {"$set": update_data})
-    
     updated_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if isinstance(updated_doc.get('created_at'), str):
         updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
     return Event(**updated_doc)
-
-### MODIFIÉ ###
 @api_router.delete("/events/{event_id}")
 async def delete_event(event_id: str, current_user: UserResponse = Depends(get_current_user)):
-    # N'importe quel utilisateur connecté peut supprimer n'importe quel match
-    # (On pourrait changer ça plus tard pour "admin-only" si besoin)
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc:
         raise HTTPException(status_code=404, detail="Événement non trouvé")
-    
     await db.events.delete_one({"id": event_id})
     return {"message": "Événement supprimé avec succès"}
 
-# ============= TEAM GENERATION ALGORITHM (MODIFIÉ) =============
-
-# On change la signature pour accepter PlayerInDB
+# ============= TEAM GENERATION ALGORITHM (Inchangé) =============
 async def get_player_details(joueur_ids: List[str]) -> Dict[str, PlayerInDB]:
     players = await db.players.find({"id": {"$in": joueur_ids}}, {"_id": 0}).to_list(1000)
     return {p["id"]: PlayerInDB(**p) for p in players}
-
-# On change la signature pour accepter PlayerInDB
 def calculate_team_stats(team: List[str], joueurs_map: Dict[str, PlayerInDB], notes_map: Dict[str, float]) -> Dict:
     total_note = sum(notes_map.get(jid, 0) for jid in team)
     note_moyenne = total_note / len(team) if team else 0
@@ -472,8 +441,6 @@ def calculate_team_stats(team: List[str], joueurs_map: Dict[str, PlayerInDB], no
         "postes": postes_count,
         "total_note": total_note
     }
-
-# (check_constraints est inchangé)
 def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffinite]) -> bool:
     for contrainte in contraintes:
         if contrainte.type == "lier":
@@ -488,8 +455,6 @@ def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffini
                 joueurs_in_team = [j for j in contrainte.joueurs if j in team]
                 if len(joueurs_in_team) > 1: return False
     return True
-
-# On change la signature pour accepter PlayerInDB
 def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipes: int, 
                            contraintes: List[ContrainteAffinite], joueurs_map: Dict[str, PlayerInDB]) -> tuple:
     notes_map = {jp.joueur_id: jp.note_temporaire for jp in joueurs_presents}
@@ -538,20 +503,15 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
     if best_teams is None:
         raise ValueError("Impossible de générer des équipes respectant toutes les contraintes")
     return best_teams, warning_message
-
-### MODIFIÉ ###
 @api_router.post("/events/{event_id}/generate", response_model=GenerateTeamsResponse)
 async def generate_teams(event_id: str, current_user: UserResponse = Depends(get_current_user)):
-    # N'importe quel utilisateur connecté peut générer
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event_doc: raise HTTPException(status_code=404, detail="Événement non trouvé")
     event = Event(**event_doc)
     if not event.joueurs_presents:
         raise HTTPException(status_code=400, detail="Aucun joueur présent")
-    
     joueur_ids = [jp.joueur_id for jp in event.joueurs_presents]
     joueurs_map = await get_player_details(joueur_ids)
-    
     try:
         teams, warning = generate_balanced_teams(
             event.joueurs_presents,
@@ -586,7 +546,7 @@ async def generate_teams(event_id: str, current_user: UserResponse = Depends(get
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# ============= SHARE LINK (MODIFIÉ) =============
+# ============= SHARE LINK (Inchangé) =============
 @api_router.get("/share/{share_token}")
 async def get_shared_event(share_token: str):
     event_doc = await db.events.find_one({"share_token": share_token}, {"_id": 0})
@@ -594,11 +554,9 @@ async def get_shared_event(share_token: str):
     event = Event(**event_doc)
     if not event.equipes_generees:
         raise HTTPException(status_code=400, detail="Les équipes n'ont pas encore été générées")
-    
     all_joueur_ids = [jp.joueur_id for jp in event.joueurs_presents]
     joueurs_map = await get_player_details(all_joueur_ids)
     notes_map = {jp.joueur_id: jp.note_temporaire for jp in event.joueurs_presents}
-    
     response_teams = []
     for team in event.equipes_generees:
         stats = calculate_team_stats(team, joueurs_map, notes_map)
@@ -624,7 +582,6 @@ async def get_shared_event(share_token: str):
     }
 
 # ============= ROOT ROUTES =============
-
 @api_router.get("/")
 async def root():
     return {"message": "API Générateur d'Équipes de Foot V5 (Collaboratif)"}
