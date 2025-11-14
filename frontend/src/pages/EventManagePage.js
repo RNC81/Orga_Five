@@ -4,7 +4,7 @@ import { getEvent, getPlayers, updateEvent, generateTeams } from '../services/ap
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'; // CardContent est maintenant utilisé
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import {
   Table,
   TableBody,
@@ -21,8 +21,40 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { toast } from 'sonner';
-import { ArrowLeft, UserPlus, UserMinus, Star, Shuffle, AlertTriangle, Link, Link2Off, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft, UserPlus, UserMinus, Star, Shuffle, AlertTriangle,
+  Link, Link2Off, Trash2, ClipboardCopy, GripVertical
+} from 'lucide-react';
 import { Badge } from '../components/ui/badge';
+
+// NOUVEAUX IMPORTS pour le Drag and Drop
+import {
+  DndContext,
+  closestCorners,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragOverlay,
+} from '@dnd-kit/core';
+import {
+  useDroppable,
+} from '@dnd-kit/core';
+import {
+  useSortable,
+  SortableContext,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+// Fonction helper pour recalculer la moyenne d'une équipe
+const calculateTeamAvg = (team) => {
+  if (!team || team.joueurs.length === 0) {
+    return 0;
+  }
+  const totalNote = team.joueurs.reduce((acc, p) => acc + (p.note || 0), 0);
+  return (totalNote / team.joueurs.length).toFixed(1);
+};
+
 
 export default function EventManagePage() {
   const { id: eventId } = useParams();
@@ -32,11 +64,18 @@ export default function EventManagePage() {
   const [allPlayers, setAllPlayers] = useState([]);
   const [presentPlayersMap, setPresentPlayersMap] = useState(new Map());
   const [constraints, setConstraints] = useState([]);
-  const [generatedTeams, setGeneratedTeams] = useState([]);
+  
+  // MODIFIÉ : L'état des équipes est maintenant plus riche pour le DnD
+  const [generatedTeams, setGeneratedTeams] = useState([]); // [{ id: 'team-0', joueurs: [...], note_moyenne: 'X' }]
+  
   const [warningMessage, setWarningMessage] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // 1. Charger toutes les données (inchangé)
+  // NOUVEL ÉTAT pour le Drag and Drop
+  const [activePlayer, setActivePlayer] = useState(null);
+  const sensors = useSensors(useSensor(PointerSensor));
+
+  // 1. Charger toutes les données
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -72,9 +111,9 @@ export default function EventManagePage() {
     loadData();
   }, [eventId, navigate]);
   
-  // (fonction rebuildTeamData inchangée)
+  // MODIFIÉ : Ajoute un ID stable à chaque équipe pour le DnD
   const rebuildTeamData = (teamIdsList, allPlayersData, notesMap) => {
-    const teams = teamIdsList.map(teamIds => {
+    const teams = teamIdsList.map((teamIds, index) => { // Ajout de 'index'
       const teamPlayers = teamIds.map(id => {
         const player = allPlayersData.find(p => p.id === id);
         return {
@@ -85,6 +124,7 @@ export default function EventManagePage() {
       const teamNotes = teamPlayers.map(p => p.note);
       const avgNote = teamNotes.reduce((a, b) => a + b, 0) / teamNotes.length;
       return {
+        id: `team-${index}`, // ID stable (ex: 'team-0')
         joueurs: teamPlayers,
         note_moyenne: avgNote.toFixed(1)
       };
@@ -131,11 +171,7 @@ export default function EventManagePage() {
       toast.error("Veuillez sélectionner deux joueurs différents.");
       return;
     }
-    const newConstraint = {
-      id: Date.now(),
-      type: type,
-      joueurs: [player1Id, player2Id]
-    };
+    const newConstraint = { id: Date.now(), type: type, joueurs: [player1Id, player2Id] };
     setConstraints(prev => [...prev, newConstraint]);
     setGeneratedTeams([]);
   };
@@ -144,7 +180,7 @@ export default function EventManagePage() {
     setGeneratedTeams([]);
   };
 
-  // 5. Sauvegarde et Génération (inchangée)
+  // 5. Sauvegarde et Génération (MODIFIÉ)
   const handleSaveAndGenerate = async () => {
     setLoading(true);
     try {
@@ -159,12 +195,20 @@ export default function EventManagePage() {
       
       await updateEvent(eventId, {
         joueurs_presents: joueurs_presents_data,
-        contraintes_affinite: contraintes_affinite_data
+        contraintes_affinite: contraintes_affinite_data,
+        equipes_generees: [] // On réinitialise les équipes sauvegardées
       });
       toast.success('Liste des présents et contraintes sauvegardées ! Lancement...');
       
       const response = await generateTeams(eventId);
-      setGeneratedTeams(response.data.equipes);
+      
+      // On met à jour l'état avec des IDs stables
+      const teamsWithIds = response.data.equipes.map((team, index) => ({
+        ...team,
+        id: `team-${index}` // Donne un ID stable pour le DnD
+      }));
+      setGeneratedTeams(teamsWithIds);
+      
       setWarningMessage(response.data.warning_message);
       
       if(response.data.warning_message) {
@@ -179,139 +223,298 @@ export default function EventManagePage() {
     }
   };
   
+  // 6. NOUVELLES fonctions pour le Drag and Drop
+  
+  const handleDragStart = (event) => {
+    const { active } = event;
+    // Trouve le joueur complet à partir de son ID
+    const player = presentPlayers.find(p => p.id === active.id);
+    setActivePlayer(player);
+  };
+  
+  const handleDragEnd = (event) => {
+    const { active, over } = event;
+    
+    setActivePlayer(null); // Cache l'overlay
+    
+    if (!over) return; // Lâché dans le vide
+    
+    // over.id est l'ID de la colonne (ex: 'team-0')
+    const destTeamId = over.id;
+    
+    // Trouve l'équipe source
+    let sourceTeamId = null;
+    let playerToMove = null;
+    
+    generatedTeams.forEach(team => {
+      const player = team.joueurs.find(p => p.id === active.id);
+      if (player) {
+        sourceTeamId = team.id;
+        playerToMove = player;
+      }
+    });
+
+    if (!playerToMove || sourceTeamId === destTeamId) {
+      return; // Pas de changement
+    }
+
+    // Mise à jour de l'état
+    setGeneratedTeams(prevTeams => {
+      const newTeams = prevTeams.map(team => ({...team, joueurs: [...team.joueurs]})); // Copie profonde
+      
+      const sourceTeam = newTeams.find(t => t.id === sourceTeamId);
+      const destTeam = newTeams.find(t => t.id === destTeamId);
+      
+      // 1. Retirer le joueur de l'équipe source
+      const playerIndex = sourceTeam.joueurs.findIndex(p => p.id === active.id);
+      sourceTeam.joueurs.splice(playerIndex, 1);
+      
+      // 2. Ajouter le joueur à l'équipe de destination
+      destTeam.joueurs.push(playerToMove);
+      
+      // 3. Recalculer les moyennes des deux équipes
+      sourceTeam.note_moyenne = calculateTeamAvg(sourceTeam);
+      destTeam.note_moyenne = calculateTeamAvg(destTeam);
+      
+      return newTeams;
+    });
+    
+    toast.info('Équipes ajustées manuellement. L\'équilibre a changé.');
+  };
+  
+  const handleDragCancel = () => {
+    setActivePlayer(null);
+  };
+
+  // 7. NOUVELLE fonction pour Copier dans le presse-papiers
+  const handleCopyToClipboard = () => {
+    if (generatedTeams.length === 0) {
+      toast.error("Aucune équipe à copier !");
+      return;
+    }
+    
+    const text = generatedTeams.map((team, index) => {
+      const header = `--- ÉQUIPE ${index + 1} (Moy: ${team.note_moyenne}) ---`;
+      const playerLines = team.joueurs
+        .map(p => `- ${p.nom} (Gén: ${p.note})`)
+        .join('\n');
+      return header + '\n' + playerLines;
+    }).join('\n\n');
+    
+    navigator.clipboard.writeText(text);
+    toast.success('Équipes copiées dans le presse-papiers !');
+  };
+
   if (loading && !event) {
     return <div className="min-h-screen flex items-center justify-center">Chargement du match...</div>;
   }
   
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header (inchangé) */}
-      <header className="bg-white shadow-sm border-b sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-3">
-            <Button variant="outline" size="icon" onClick={() => navigate('/dashboard')}>
-              <ArrowLeft className="w-4 h-4" />
-            </Button>
-            <div>
-              <h1 className="text-xl md:text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>
-                {event?.nom_evenement}
-              </h1>
-              <p className="text-sm text-gray-500">{presentPlayers.length} joueurs présents | {event?.nombre_equipes} équipes | {constraints.length} contraintes</p>
+    // Contexte DnD ajouté ici
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCorners}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
+      <div className="min-h-screen bg-gray-50">
+        {/* Header (inchangé) */}
+        <header className="bg-white shadow-sm border-b sticky top-0 z-10">
+          <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="flex items-center gap-3">
+              <Button variant="outline" size="icon" onClick={() => navigate('/dashboard')}>
+                <ArrowLeft className="w-4 h-4" />
+              </Button>
+              <div>
+                <h1 className="text-xl md:text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>
+                  {event?.nom_evenement}
+                </h1>
+                <p className="text-sm text-gray-500">{presentPlayers.length} joueurs présents | {event?.nombre_equipes} équipes | {constraints.length} contraintes</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <Button size="lg" onClick={handleSaveAndGenerate} disabled={loading || presentPlayers.length === 0} className="w-full md:w-auto">
+                <Shuffle className="w-5 h-5 mr-2" />
+                {loading ? "Génération..." : "Sauvegarder et Générer"}
+              </Button>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Button size="lg" onClick={handleSaveAndGenerate} disabled={loading || presentPlayers.length === 0}>
-              <Shuffle className="w-5 h-5 mr-2" />
-              {loading ? "Génération..." : "Sauvegarder et Générer"}
-            </Button>
+        </header>
+
+        {/* Main Content (inchangé) */}
+        <main className="max-w-7xl mx-auto px-4 py-8 grid md:grid-cols-2 gap-8">
+          
+          {/* Colonne 1: Listes des Joueurs (inchangée) */}
+          <div className="space-y-8">
+            <Card>
+              <CardHeader>
+                <CardTitle>Contraintes d'Affinité</CardTitle>
+                <CardDescription>Forcez 2 joueurs à être ensemble ou séparez-les.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AffinityManager
+                  players={presentPlayers}
+                  constraints={constraints}
+                  onAdd={addConstraint}
+                  onRemove={removeConstraint}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Joueurs Présents ({presentPlayers.length})</CardTitle>
+                <CardDescription>Ajustez la note "Générale" si besoin pour ce match.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <PlayerTable
+                  players={presentPlayers}
+                  notes={presentPlayersMap}
+                  actionIcon={<UserMinus className="w-4 h-4" />}
+                  onActionClick={(player) => removePlayer(player.id)}
+                  onNoteChange={updatePlayerNote}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Joueurs Disponibles ({availablePlayers.length})</CardTitle>
+                <CardDescription>Cliquez pour ajouter un joueur à la liste des présents.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <PlayerTable
+                  players={availablePlayers}
+                  actionIcon={<UserPlus className="w-4 h-4" />}
+                  onActionClick={addPlayer}
+                />
+              </CardContent>
+            </Card>
           </div>
-        </div>
-      </header>
 
-      {/* Main Content (MODIFIÉ pour être responsive) */}
-      <main className="max-w-7xl mx-auto px-4 py-8 grid md:grid-cols-2 gap-8">
-        
-        {/* Colonne 1: Listes des Joueurs */}
-        <div className="space-y-8">
-          <Card>
-            <CardHeader>
-              <CardTitle>Contraintes d'Affinité</CardTitle>
-              <CardDescription>Forcez 2 joueurs à être ensemble ou séparez-les.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <AffinityManager
-                players={presentPlayers}
-                constraints={constraints}
-                onAdd={addConstraint}
-                onRemove={removeConstraint}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Joueurs Présents ({presentPlayers.length})</CardTitle>
-              <CardDescription>Ajustez la note "Générale" si besoin pour ce match.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {/* Utilisation du composant PlayerTable mis à jour */}
-              <PlayerTable
-                players={presentPlayers}
-                notes={presentPlayersMap}
-                actionIcon={<UserMinus className="w-4 h-4" />}
-                onActionClick={(player) => removePlayer(player.id)}
-                onNoteChange={updatePlayerNote}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Joueurs Disponibles ({availablePlayers.length})</CardTitle>
-              <CardDescription>Cliquez pour ajouter un joueur à la liste des présents.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {/* Utilisation du composant PlayerTable mis à jour */}
-              <PlayerTable
-                players={availablePlayers}
-                actionIcon={<UserPlus className="w-4 h-4" />}
-                onActionClick={addPlayer}
-              />
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Colonne 2: Équipes Générées (MODIFIÉ pour être responsive) */}
-        <div className="space-y-8">
-          <Card className="sticky top-[120px]">
-            <CardHeader>
-              <CardTitle>Équipes Générées</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {warningMessage && (
-                <div className="mb-4 p-3 rounded-md bg-yellow-50 border border-yellow-200 text-yellow-700 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4" />
-                  <span className="text-sm">{warningMessage}</span>
+          {/* Colonne 2: Équipes Générées (MODIFIÉ) */}
+          <div className="space-y-8">
+            <Card className="sticky top-[120px]">
+              <CardHeader>
+                {/* NOUVEAU : Bouton Copier ajouté */}
+                <div className="flex justify-between items-center">
+                  <CardTitle>Équipes Générées</CardTitle>
+                  {generatedTeams.length > 0 && (
+                    <Button variant="outline" size="icon" onClick={handleCopyToClipboard}>
+                      <ClipboardCopy className="w-4 h-4" />
+                    </Button>
+                  )}
                 </div>
-              )}
-              {generatedTeams.length === 0 ? (
-                <p className="text-center text-gray-500 py-8">
-                  Cliquez sur "Générer les Équipes" une fois vos joueurs présents sélectionnés.
-                </p>
-              ) : (
-                // Grille responsive
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
-                  {generatedTeams.map((team, index) => (
-                    <div key={index} className="p-3 bg-gray-50 rounded-lg border">
-                      <h4 className="font-bold text-lg mb-2">Équipe {index + 1}</h4>
-                      <p className="text-sm text-gray-600 font-medium mb-3">
-                        Note Moyenne: <span className="text-blue-600 font-bold">{team.note_moyenne}</span>
-                      </p>
-                      <ul className="space-y-2">
+              </CardHeader>
+              <CardContent>
+                {warningMessage && (
+                  <div className="mb-4 p-3 rounded-md bg-yellow-50 border border-yellow-200 text-yellow-700 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span className="text-sm">{warningMessage}</span>
+                  </div>
+                )}
+                {generatedTeams.length === 0 ? (
+                  <p className="text-center text-gray-500 py-8">
+                    Cliquez sur "Générer les Équipes" une fois vos joueurs présents sélectionnés.
+                  </p>
+                ) : (
+                  // NOUVEAU : Grille modifiée pour le DnD
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
+                    {generatedTeams.map((team) => (
+                      <DroppableTeamColumn key={team.id} id={team.id} team={team}>
                         {team.joueurs.map((player) => (
-                          <li key={player.id} className="text-sm p-2 bg-white rounded shadow-sm flex justify-between items-center">
-                            <span>{player.nom}</span>
-                            <span className="text-xs font-bold text-gray-500">{player.note}</span>
-                          </li>
+                          <DraggablePlayerItem key={player.id} player={player} />
                         ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                      </DroppableTeamColumn>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </main>
         
-      </main>
+        {/* NOUVEAU : Overlay pour le Drag and Drop */}
+        <DragOverlay>
+          {activePlayer ? (
+            <PlayerItem player={activePlayer} isDragging />
+          ) : null}
+        </DragOverlay>
+        
+      </div>
+    </DndContext>
+  );
+}
+
+
+// ### NOUVEAU : Composant Colonne d'Équipe (Droppable) ###
+function DroppableTeamColumn({ id, team, children }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  
+  return (
+    <div 
+      ref={setNodeRef}
+      className={`p-3 bg-gray-50 rounded-lg border ${isOver ? 'border-blue-500 ring-2 ring-blue-200' : 'border'}`}
+    >
+      <h4 className="font-bold text-lg mb-2">Équipe {parseInt(id.split('-')[1]) + 1}</h4>
+      <p className="text-sm text-gray-600 font-medium mb-3">
+        Note Moyenne: <span className="text-blue-600 font-bold">{team.note_moyenne}</span>
+      </p>
+      
+      {/* On utilise SortableContext pour les joueurs à l'intérieur */}
+      <SortableContext items={team.joueurs.map(p => p.id)} strategy={verticalListSortingStrategy}>
+        <ul className="space-y-2">
+          {children}
+        </ul>
+      </SortableContext>
     </div>
   );
 }
 
-// ### COMPOSANT PlayerTable MODIFIÉ ###
+// ### NOUVEAU : Composant Item Joueur (Draggable) ###
+function DraggablePlayerItem({ player }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: player.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1, // Le joueur est semi-transparent pendant le drag
+    touchAction: 'none', // Pour un meilleur scrolling sur mobile
+  };
+
+  return (
+    <li ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <PlayerItem player={player} />
+    </li>
+  );
+}
+
+// ### NOUVEAU : Composant visuel du Joueur (pour l'item et l'overlay) ###
+function PlayerItem({ player, isDragging = false }) {
+  return (
+    <div
+      className={`text-sm p-2 bg-white rounded shadow-sm flex justify-between items-center ${isDragging ? 'opacity-80' : ''}`}
+    >
+      <div className="flex items-center gap-2">
+        <GripVertical className="w-4 h-4 text-gray-400 cursor-grab" />
+        <span>{player.nom}</span>
+      </div>
+      <span className="text-xs font-bold text-gray-500">{player.note}</span>
+    </div>
+  );
+}
+
+
+// --- Composant PlayerTable (inchangé) ---
 function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }) {
   return (
     <>
-      {/* --- VUE DESKTOP (TABLEAU) --- */}
-      {/* `hidden md:block` = caché sur mobile, visible sur desktop */}
       <div className="hidden md:block max-h-96 overflow-y-auto border rounded-lg">
         <Table>
           <TableHeader>
@@ -365,8 +568,6 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
         </Table>
       </div>
 
-      {/* --- VUE MOBILE (CARTES) --- */}
-      {/* `md:hidden` = visible sur mobile, caché sur desktop */}
       <div className="md:hidden space-y-3 max-h-96 overflow-y-auto">
         {players.length === 0 ? (
           <p className="text-sm text-gray-500 text-center py-4">
@@ -382,7 +583,6 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
                     <Star className="w-4 h-4 text-yellow-400" />
                     Gén: {player.note_generale}
                   </div>
-                  {/* Si c'est la liste "Présents", on affiche l'input de note */}
                   {onNoteChange && (
                     <div className="flex items-center gap-2 pt-1">
                       <Label htmlFor={`note-${player.id}`} className="text-xs">Note Match:</Label>
@@ -411,7 +611,7 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
   );
 }
 
-// Composant Affinités (MODIFIÉ pour être responsive)
+// --- Composant AffinityManager (inchangé) ---
 function AffinityManager({ players, constraints, onAdd, onRemove }) {
   const [player1, setPlayer1] = useState('');
   const [player2, setPlayer2] = useState('');
@@ -428,7 +628,6 @@ function AffinityManager({ players, constraints, onAdd, onRemove }) {
 
   return (
     <div className="space-y-4">
-      {/* Formulaire d'ajout (MODIFIÉ) */}
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
           <Select value={player1} onValueChange={setPlayer1}>
@@ -456,7 +655,6 @@ function AffinityManager({ players, constraints, onAdd, onRemove }) {
         </div>
       </div>
       
-      {/* Liste des contraintes actuelles (inchangée) */}
       <div className="space-y-2">
         <Label>Contraintes Actives</Label>
         {constraints.length === 0 ? (
