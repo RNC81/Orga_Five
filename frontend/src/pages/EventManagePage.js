@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 
-// NOUVEAUX IMPORTS pour le Drag and Drop
+// ### IMPORTS POUR LE DRAG AND DROP (DND) ###
 import {
   DndContext,
   closestCorners,
@@ -35,6 +35,8 @@ import {
   useSensor,
   useSensors,
   DragOverlay,
+  DragStartEvent,
+  DragEndEvent,
 } from '@dnd-kit/core';
 import {
   useDroppable,
@@ -49,12 +51,11 @@ import { CSS } from '@dnd-kit/utilities';
 // Fonction helper pour recalculer la moyenne d'une équipe
 const calculateTeamAvg = (team) => {
   if (!team || team.joueurs.length === 0) {
-    return 0;
+    return '0.0'; // Retourne un string
   }
   const totalNote = team.joueurs.reduce((acc, p) => acc + (p.note || 0), 0);
-  return (totalNote / team.joueurs.length).toFixed(1);
+  return (totalNote / team.joueurs.length).toFixed(1); // Arrondi à 1 décimale
 };
-
 
 export default function EventManagePage() {
   const { id: eventId } = useParams();
@@ -64,18 +65,15 @@ export default function EventManagePage() {
   const [allPlayers, setAllPlayers] = useState([]);
   const [presentPlayersMap, setPresentPlayersMap] = useState(new Map());
   const [constraints, setConstraints] = useState([]);
-  
-  // MODIFIÉ : L'état des équipes est maintenant plus riche pour le DnD
-  const [generatedTeams, setGeneratedTeams] = useState([]); // [{ id: 'team-0', joueurs: [...], note_moyenne: 'X' }]
-  
+  const [generatedTeams, setGeneratedTeams] = useState([]); // État principal pour les équipes
   const [warningMessage, setWarningMessage] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // NOUVEL ÉTAT pour le Drag and Drop
-  const [activePlayer, setActivePlayer] = useState(null);
+  // État pour le Drag and Drop
+  const [activePlayer, setActivePlayer] = useState(null); // Le joueur en cours de drag
   const sensors = useSensors(useSensor(PointerSensor));
 
-  // 1. Charger toutes les données
+  // 1. Charger toutes les données (inchangé)
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -111,9 +109,9 @@ export default function EventManagePage() {
     loadData();
   }, [eventId, navigate]);
   
-  // MODIFIÉ : Ajoute un ID stable à chaque équipe pour le DnD
+  // (fonction rebuildTeamData modifiée pour ajouter l'ID stable)
   const rebuildTeamData = (teamIdsList, allPlayersData, notesMap) => {
-    const teams = teamIdsList.map((teamIds, index) => { // Ajout de 'index'
+    const teams = teamIdsList.map((teamIds, index) => {
       const teamPlayers = teamIds.map(id => {
         const player = allPlayersData.find(p => p.id === id);
         return {
@@ -121,12 +119,10 @@ export default function EventManagePage() {
           note: notesMap.get(id) || player.note_generale,
         };
       });
-      const teamNotes = teamPlayers.map(p => p.note);
-      const avgNote = teamNotes.reduce((a, b) => a + b, 0) / teamNotes.length;
       return {
         id: `team-${index}`, // ID stable (ex: 'team-0')
         joueurs: teamPlayers,
-        note_moyenne: avgNote.toFixed(1)
+        note_moyenne: calculateTeamAvg({joueurs: teamPlayers}) // Utilise la fonction helper
       };
     });
     setGeneratedTeams(teams);
@@ -180,7 +176,7 @@ export default function EventManagePage() {
     setGeneratedTeams([]);
   };
 
-  // 5. Sauvegarde et Génération (MODIFIÉ)
+  // 5. Sauvegarde et Génération (MODIFIÉ pour setter les IDs stables)
   const handleSaveAndGenerate = async () => {
     setLoading(true);
     try {
@@ -196,7 +192,7 @@ export default function EventManagePage() {
       await updateEvent(eventId, {
         joueurs_presents: joueurs_presents_data,
         contraintes_affinite: contraintes_affinite_data,
-        equipes_generees: [] // On réinitialise les équipes sauvegardées
+        equipes_generees: [] 
       });
       toast.success('Liste des présents et contraintes sauvegardées ! Lancement...');
       
@@ -222,8 +218,8 @@ export default function EventManagePage() {
       setLoading(false);
     }
   };
-  
-  // 6. NOUVELLES fonctions pour le Drag and Drop
+
+  // 6. ### FONCTIONS DRAG AND DROP CORRIGÉES ###
   
   const handleDragStart = (event) => {
     const { active } = event;
@@ -237,46 +233,45 @@ export default function EventManagePage() {
     
     setActivePlayer(null); // Cache l'overlay
     
-    if (!over) return; // Lâché dans le vide
+    if (!active || !over) return; // Lâché dans le vide
     
-    // over.id est l'ID de la colonne (ex: 'team-0')
-    const destTeamId = over.id;
+    const activePlayerId = active.id;
     
-    // Trouve l'équipe source
-    let sourceTeamId = null;
-    let playerToMove = null;
-    
-    generatedTeams.forEach(team => {
-      const player = team.joueurs.find(p => p.id === active.id);
-      if (player) {
-        sourceTeamId = team.id;
-        playerToMove = player;
-      }
-    });
+    // 1. Trouver l'équipe source
+    const sourceTeam = generatedTeams.find(t => t.joueurs.some(p => p.id === activePlayerId));
 
-    if (!playerToMove || sourceTeamId === destTeamId) {
+    // 2. Trouver l'équipe de destination
+    // L'objet 'over' peut être la colonne (ID 'team-X') ou un joueur (ID 'player-Y')
+    const destTeam = generatedTeams.find(t => t.id === over.id || t.joueurs.some(p => p.id === over.id));
+
+    // 3. Vérifier si on doit faire quelque chose
+    if (!sourceTeam || !destTeam || sourceTeam.id === destTeam.id) {
       return; // Pas de changement
     }
+    
+    // 4. Trouver le joueur à déplacer
+    const playerToMove = sourceTeam.joueurs.find(p => p.id === activePlayerId);
+    if (!playerToMove) return;
 
-    // Mise à jour de l'état
+    // 5. Mettre à jour l'état (de manière immutable)
     setGeneratedTeams(prevTeams => {
-      const newTeams = prevTeams.map(team => ({...team, joueurs: [...team.joueurs]})); // Copie profonde
+      const newTeams = prevTeams.map(team => {
+        if (team.id === sourceTeam.id) {
+          // Retirer le joueur de l'équipe source
+          return { ...team, joueurs: team.joueurs.filter(p => p.id !== activePlayerId) };
+        }
+        if (team.id === destTeam.id) {
+          // Ajouter le joueur à l'équipe de destination
+          return { ...team, joueurs: [...team.joueurs, playerToMove] };
+        }
+        return team;
+      });
       
-      const sourceTeam = newTeams.find(t => t.id === sourceTeamId);
-      const destTeam = newTeams.find(t => t.id === destTeamId);
-      
-      // 1. Retirer le joueur de l'équipe source
-      const playerIndex = sourceTeam.joueurs.findIndex(p => p.id === active.id);
-      sourceTeam.joueurs.splice(playerIndex, 1);
-      
-      // 2. Ajouter le joueur à l'équipe de destination
-      destTeam.joueurs.push(playerToMove);
-      
-      // 3. Recalculer les moyennes des deux équipes
-      sourceTeam.note_moyenne = calculateTeamAvg(sourceTeam);
-      destTeam.note_moyenne = calculateTeamAvg(destTeam);
-      
-      return newTeams;
+      // 6. Recalculer les moyennes
+      return newTeams.map(team => ({
+        ...team,
+        note_moyenne: calculateTeamAvg(team),
+      }));
     });
     
     toast.info('Équipes ajustées manuellement. L\'équilibre a changé.');
@@ -286,7 +281,7 @@ export default function EventManagePage() {
     setActivePlayer(null);
   };
 
-  // 7. NOUVELLE fonction pour Copier dans le presse-papiers
+  // 7. ### NOUVELLE FONCTION COPIER PRESSE-PAPIER ###
   const handleCopyToClipboard = () => {
     if (generatedTeams.length === 0) {
       toast.error("Aucune équipe à copier !");
@@ -310,7 +305,6 @@ export default function EventManagePage() {
   }
   
   return (
-    // Contexte DnD ajouté ici
     <DndContext
       sensors={sensors}
       collisionDetection={closestCorners}
@@ -345,7 +339,6 @@ export default function EventManagePage() {
         {/* Main Content (inchangé) */}
         <main className="max-w-7xl mx-auto px-4 py-8 grid md:grid-cols-2 gap-8">
           
-          {/* Colonne 1: Listes des Joueurs (inchangée) */}
           <div className="space-y-8">
             <Card>
               <CardHeader>
@@ -395,9 +388,9 @@ export default function EventManagePage() {
           <div className="space-y-8">
             <Card className="sticky top-[120px]">
               <CardHeader>
-                {/* NOUVEAU : Bouton Copier ajouté */}
                 <div className="flex justify-between items-center">
                   <CardTitle>Équipes Générées</CardTitle>
+                  {/* ### BOUTON COPIER AJOUTÉ ### */}
                   {generatedTeams.length > 0 && (
                     <Button variant="outline" size="icon" onClick={handleCopyToClipboard}>
                       <ClipboardCopy className="w-4 h-4" />
@@ -417,8 +410,8 @@ export default function EventManagePage() {
                     Cliquez sur "Générer les Équipes" une fois vos joueurs présents sélectionnés.
                   </p>
                 ) : (
-                  // NOUVEAU : Grille modifiée pour le DnD
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* ### ZONE DND MODIFIÉE ### */}
                     {generatedTeams.map((team) => (
                       <DroppableTeamColumn key={team.id} id={team.id} team={team}>
                         {team.joueurs.map((player) => (
@@ -433,7 +426,7 @@ export default function EventManagePage() {
           </div>
         </main>
         
-        {/* NOUVEAU : Overlay pour le Drag and Drop */}
+        {/* ### OVERLAY DND AJOUTÉ ### */}
         <DragOverlay>
           {activePlayer ? (
             <PlayerItem player={activePlayer} isDragging />
@@ -448,19 +441,24 @@ export default function EventManagePage() {
 
 // ### NOUVEAU : Composant Colonne d'Équipe (Droppable) ###
 function DroppableTeamColumn({ id, team, children }) {
-  const { setNodeRef, isOver } = useDroppable({ id });
+  const { setNodeRef, isOver } = useDroppable({ 
+    id: id,
+    // Permet de détecter la colonne même si elle est vide
+    data: {
+      type: 'team-column'
+    } 
+  });
   
   return (
     <div 
       ref={setNodeRef}
-      className={`p-3 bg-gray-50 rounded-lg border ${isOver ? 'border-blue-500 ring-2 ring-blue-200' : 'border'}`}
+      className={`p-3 bg-gray-50 rounded-lg border min-h-40 ${isOver ? 'border-blue-500 ring-2 ring-blue-200' : 'border'}`}
     >
       <h4 className="font-bold text-lg mb-2">Équipe {parseInt(id.split('-')[1]) + 1}</h4>
       <p className="text-sm text-gray-600 font-medium mb-3">
         Note Moyenne: <span className="text-blue-600 font-bold">{team.note_moyenne}</span>
       </p>
       
-      {/* On utilise SortableContext pour les joueurs à l'intérieur */}
       <SortableContext items={team.joueurs.map(p => p.id)} strategy={verticalListSortingStrategy}>
         <ul className="space-y-2">
           {children}
@@ -484,25 +482,28 @@ function DraggablePlayerItem({ player }) {
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1, // Le joueur est semi-transparent pendant le drag
-    touchAction: 'none', // Pour un meilleur scrolling sur mobile
+    opacity: isDragging ? 0.5 : 1,
+    touchAction: 'none',
   };
 
   return (
-    <li ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <PlayerItem player={player} />
+    <li ref={setNodeRef} style={style} {...attributes}>
+      <PlayerItem player={player} listeners={listeners} />
     </li>
   );
 }
 
-// ### NOUVEAU : Composant visuel du Joueur (pour l'item et l'overlay) ###
-function PlayerItem({ player, isDragging = false }) {
+// ### NOUVEAU : Composant visuel du Joueur ###
+// On sépare le "look" de la logique Draggable
+function PlayerItem({ player, isDragging = false, listeners }) {
   return (
     <div
       className={`text-sm p-2 bg-white rounded shadow-sm flex justify-between items-center ${isDragging ? 'opacity-80' : ''}`}
     >
       <div className="flex items-center gap-2">
-        <GripVertical className="w-4 h-4 text-gray-400 cursor-grab" />
+        <Button variant="ghost" size="icon" className="cursor-grab" {...listeners}>
+          <GripVertical className="w-4 h-4 text-gray-400" />
+        </Button>
         <span>{player.nom}</span>
       </div>
       <span className="text-xs font-bold text-gray-500">{player.note}</span>
@@ -567,7 +568,6 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
           </TableBody>
         </Table>
       </div>
-
       <div className="md:hidden space-y-3 max-h-96 overflow-y-auto">
         {players.length === 0 ? (
           <p className="text-sm text-gray-500 text-center py-4">
@@ -615,17 +615,13 @@ function PlayerTable({ players, notes, actionIcon, onActionClick, onNoteChange }
 function AffinityManager({ players, constraints, onAdd, onRemove }) {
   const [player1, setPlayer1] = useState('');
   const [player2, setPlayer2] = useState('');
-
   const getPlayerName = (id) => allPlayers.find(p => p.id === id)?.nom || '???';
-  
   const allPlayers = players; 
-
   const handleAdd = (type) => {
     onAdd(type, player1, player2);
     setPlayer1('');
     setPlayer2('');
   };
-
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -636,7 +632,6 @@ function AffinityManager({ players, constraints, onAdd, onRemove }) {
               {players.map(p => <SelectItem key={p.id} value={p.id}>{p.nom}</SelectItem>)}
             </SelectContent>
           </Select>
-          
           <Select value={player2} onValueChange={setPlayer2}>
             <SelectTrigger><SelectValue placeholder="Joueur 2" /></SelectTrigger>
             <SelectContent>
@@ -644,7 +639,6 @@ function AffinityManager({ players, constraints, onAdd, onRemove }) {
             </SelectContent>
           </Select>
         </div>
-        
         <div className="grid grid-cols-2 gap-2">
           <Button onClick={() => handleAdd('lier')} className="bg-green-600 hover:bg-green-700 w-full">
             <Link className="w-4 h-4 mr-2" /> Lier
@@ -654,7 +648,6 @@ function AffinityManager({ players, constraints, onAdd, onRemove }) {
           </Button>
         </div>
       </div>
-      
       <div className="space-y-2">
         <Label>Contraintes Actives</Label>
         {constraints.length === 0 ? (
