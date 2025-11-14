@@ -23,11 +23,11 @@ import {
 import { toast } from 'sonner';
 import {
   ArrowLeft, UserPlus, UserMinus, Star, Shuffle, AlertTriangle,
-  Link, Link2Off, Trash2, ClipboardCopy, GripVertical
+  Link, Link2Off, Trash2, ClipboardCopy, GripVertical, SortAsc // Ajout de SortAsc
 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 
-// ### IMPORTS POUR LE DRAG AND DROP (DND) ###
+// Imports pour le Drag and Drop (DND)
 import {
   DndContext,
   closestCorners,
@@ -35,8 +35,6 @@ import {
   useSensor,
   useSensors,
   DragOverlay,
-  DragStartEvent,
-  DragEndEvent,
 } from '@dnd-kit/core';
 import {
   useDroppable,
@@ -65,13 +63,16 @@ export default function EventManagePage() {
   const [allPlayers, setAllPlayers] = useState([]);
   const [presentPlayersMap, setPresentPlayersMap] = useState(new Map());
   const [constraints, setConstraints] = useState([]);
-  const [generatedTeams, setGeneratedTeams] = useState([]); // État principal pour les équipes
+  const [generatedTeams, setGeneratedTeams] = useState([]);
   const [warningMessage, setWarningMessage] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // État pour le Drag and Drop
-  const [activePlayer, setActivePlayer] = useState(null); // Le joueur en cours de drag
+  const [activePlayer, setActivePlayer] = useState(null);
   const sensors = useSensors(useSensor(PointerSensor));
+
+  // ### NOUVEL ÉTAT POUR LE TRI DES ÉQUIPES ###
+  const [teamSortCriteria, setTeamSortCriteria] = useState('note-desc'); // Par défaut: Note (Décroissante)
 
   // 1. Charger toutes les données (inchangé)
   useEffect(() => {
@@ -120,9 +121,9 @@ export default function EventManagePage() {
         };
       });
       return {
-        id: `team-${index}`, // ID stable (ex: 'team-0')
+        id: `team-${index}`,
         joueurs: teamPlayers,
-        note_moyenne: calculateTeamAvg({joueurs: teamPlayers}) // Utilise la fonction helper
+        note_moyenne: calculateTeamAvg({joueurs: teamPlayers})
       };
     });
     setGeneratedTeams(teams);
@@ -176,7 +177,7 @@ export default function EventManagePage() {
     setGeneratedTeams([]);
   };
 
-  // 5. Sauvegarde et Génération (MODIFIÉ pour setter les IDs stables)
+  // 5. Sauvegarde et Génération (inchangée)
   const handleSaveAndGenerate = async () => {
     setLoading(true);
     try {
@@ -198,10 +199,9 @@ export default function EventManagePage() {
       
       const response = await generateTeams(eventId);
       
-      // On met à jour l'état avec des IDs stables
       const teamsWithIds = response.data.equipes.map((team, index) => ({
         ...team,
-        id: `team-${index}` // Donne un ID stable pour le DnD
+        id: `team-${index}`
       }));
       setGeneratedTeams(teamsWithIds);
       
@@ -219,61 +219,41 @@ export default function EventManagePage() {
     }
   };
 
-  // 6. ### FONCTIONS DRAG AND DROP CORRIGÉES ###
-  
+  // 6. Fonctions Drag and Drop (inchangées)
   const handleDragStart = (event) => {
     const { active } = event;
-    // Trouve le joueur complet à partir de son ID
     const player = presentPlayers.find(p => p.id === active.id);
     setActivePlayer(player);
   };
   
   const handleDragEnd = (event) => {
     const { active, over } = event;
-    
-    setActivePlayer(null); // Cache l'overlay
-    
-    if (!active || !over) return; // Lâché dans le vide
-    
+    setActivePlayer(null);
+    if (!active || !over) return;
     const activePlayerId = active.id;
-    
-    // 1. Trouver l'équipe source
     const sourceTeam = generatedTeams.find(t => t.joueurs.some(p => p.id === activePlayerId));
-
-    // 2. Trouver l'équipe de destination
-    // L'objet 'over' peut être la colonne (ID 'team-X') ou un joueur (ID 'player-Y')
     const destTeam = generatedTeams.find(t => t.id === over.id || t.joueurs.some(p => p.id === over.id));
-
-    // 3. Vérifier si on doit faire quelque chose
     if (!sourceTeam || !destTeam || sourceTeam.id === destTeam.id) {
-      return; // Pas de changement
+      return;
     }
-    
-    // 4. Trouver le joueur à déplacer
     const playerToMove = sourceTeam.joueurs.find(p => p.id === activePlayerId);
     if (!playerToMove) return;
 
-    // 5. Mettre à jour l'état (de manière immutable)
     setGeneratedTeams(prevTeams => {
       const newTeams = prevTeams.map(team => {
         if (team.id === sourceTeam.id) {
-          // Retirer le joueur de l'équipe source
           return { ...team, joueurs: team.joueurs.filter(p => p.id !== activePlayerId) };
         }
         if (team.id === destTeam.id) {
-          // Ajouter le joueur à l'équipe de destination
           return { ...team, joueurs: [...team.joueurs, playerToMove] };
         }
         return team;
       });
-      
-      // 6. Recalculer les moyennes
       return newTeams.map(team => ({
         ...team,
         note_moyenne: calculateTeamAvg(team),
       }));
     });
-    
     toast.info('Équipes ajustées manuellement. L\'équilibre a changé.');
   };
   
@@ -281,7 +261,7 @@ export default function EventManagePage() {
     setActivePlayer(null);
   };
 
-  // 7. ### NOUVELLE FONCTION COPIER PRESSE-PAPIER ###
+  // 7. Fonction Copier Presse-papiers (MODIFIÉE pour utiliser le tri)
   const handleCopyToClipboard = () => {
     if (generatedTeams.length === 0) {
       toast.error("Aucune équipe à copier !");
@@ -290,7 +270,16 @@ export default function EventManagePage() {
     
     const text = generatedTeams.map((team, index) => {
       const header = `--- ÉQUIPE ${index + 1} (Moy: ${team.note_moyenne}) ---`;
-      const playerLines = team.joueurs
+      
+      // Applique le tri avant de copier
+      const sortedJoueurs = team.joueurs.slice().sort((a, b) => {
+        if (teamSortCriteria === 'note-desc') return b.note - a.note;
+        if (teamSortCriteria === 'note-asc') return a.note - b.note;
+        if (teamSortCriteria === 'nom-asc') return a.nom.localeCompare(b.nom);
+        return 0;
+      });
+
+      const playerLines = sortedJoueurs
         .map(p => `- ${p.nom} (Gén: ${p.note})`)
         .join('\n');
       return header + '\n' + playerLines;
@@ -388,13 +377,26 @@ export default function EventManagePage() {
           <div className="space-y-8">
             <Card className="sticky top-[120px]">
               <CardHeader>
-                <div className="flex justify-between items-center">
+                {/* ### MODIFIÉ : Ajout du bouton Copier et du menu de Tri ### */}
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-2">
                   <CardTitle>Équipes Générées</CardTitle>
-                  {/* ### BOUTON COPIER AJOUTÉ ### */}
                   {generatedTeams.length > 0 && (
-                    <Button variant="outline" size="icon" onClick={handleCopyToClipboard}>
-                      <ClipboardCopy className="w-4 h-4" />
-                    </Button>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <Select value={teamSortCriteria} onValueChange={setTeamSortCriteria}>
+                        <SelectTrigger className="w-full flex-1">
+                          <SortAsc className="w-4 h-4 mr-2" />
+                          <SelectValue placeholder="Trier par..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="note-desc">Note (Décroissante)</SelectItem>
+                          <SelectItem value="note-asc">Note (Croissante)</SelectItem>
+                          <SelectItem value="nom-asc">Nom (A-Z)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button variant="outline" size="icon" onClick={handleCopyToClipboard}>
+                        <ClipboardCopy className="w-4 h-4" />
+                      </Button>
+                    </div>
                   )}
                 </div>
               </CardHeader>
@@ -411,9 +413,14 @@ export default function EventManagePage() {
                   </p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
-                    {/* ### ZONE DND MODIFIÉE ### */}
                     {generatedTeams.map((team) => (
-                      <DroppableTeamColumn key={team.id} id={team.id} team={team}>
+                      // ### MODIFIÉ : Passe le critère de tri à la colonne ###
+                      <DroppableTeamColumn 
+                        key={team.id} 
+                        id={team.id} 
+                        team={team}
+                        sortCriteria={teamSortCriteria}
+                      >
                         {team.joueurs.map((player) => (
                           <DraggablePlayerItem key={player.id} player={player} />
                         ))}
@@ -426,7 +433,6 @@ export default function EventManagePage() {
           </div>
         </main>
         
-        {/* ### OVERLAY DND AJOUTÉ ### */}
         <DragOverlay>
           {activePlayer ? (
             <PlayerItem player={activePlayer} isDragging />
@@ -439,16 +445,26 @@ export default function EventManagePage() {
 }
 
 
-// ### NOUVEAU : Composant Colonne d'Équipe (Droppable) ###
-function DroppableTeamColumn({ id, team, children }) {
+// ### MODIFIÉ : Le composant accepte 'sortCriteria' ###
+function DroppableTeamColumn({ id, team, children, sortCriteria }) {
   const { setNodeRef, isOver } = useDroppable({ 
     id: id,
-    // Permet de détecter la colonne même si elle est vide
-    data: {
-      type: 'team-column'
-    } 
+    data: { type: 'team-column' } 
   });
   
+  // ### NOUVEAU : Tri des enfants avant de les passer à SortableContext ###
+  const sortedPlayerIds = useMemo(() => {
+    return team.joueurs
+      .slice() // Crée une copie
+      .sort((a, b) => {
+        if (sortCriteria === 'note-desc') return b.note - a.note;
+        if (sortCriteria === 'note-asc') return a.note - b.note;
+        if (sortCriteria === 'nom-asc') return a.nom.localeCompare(b.nom);
+        return 0;
+      })
+      .map(p => p.id); // On ne passe que les IDs à SortableContext
+  }, [team.joueurs, sortCriteria]);
+
   return (
     <div 
       ref={setNodeRef}
@@ -459,16 +475,21 @@ function DroppableTeamColumn({ id, team, children }) {
         Note Moyenne: <span className="text-blue-600 font-bold">{team.note_moyenne}</span>
       </p>
       
-      <SortableContext items={team.joueurs.map(p => p.id)} strategy={verticalListSortingStrategy}>
+      {/* On passe les IDs triés à SortableContext */}
+      <SortableContext items={sortedPlayerIds} strategy={verticalListSortingStrategy}>
         <ul className="space-y-2">
-          {children}
+          {/* On affiche les joueurs dans l'ordre trié */}
+          {sortedPlayerIds.map(playerId => {
+            const player = team.joueurs.find(p => p.id === playerId);
+            return <DraggablePlayerItem key={player.id} player={player} />;
+          })}
         </ul>
       </SortableContext>
     </div>
   );
 }
 
-// ### NOUVEAU : Composant Item Joueur (Draggable) ###
+// Composant DraggablePlayerItem (inchangé)
 function DraggablePlayerItem({ player }) {
   const {
     attributes,
@@ -493,8 +514,7 @@ function DraggablePlayerItem({ player }) {
   );
 }
 
-// ### NOUVEAU : Composant visuel du Joueur ###
-// On sépare le "look" de la logique Draggable
+// Composant PlayerItem (inchangé)
 function PlayerItem({ player, isDragging = false, listeners }) {
   return (
     <div
