@@ -1,4 +1,3 @@
-# On importe Response et status
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Body, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
@@ -37,7 +36,7 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer()
 
-# ============= NOUVELLE FONCTION DE CALCUL DU GÉNÉRAL =============
+# ============= FONCTION DE CALCUL DU GÉNÉRAL (Inchangée) =============
 def calculate_general(player_data: dict) -> float:
     postes = player_data.get('postes', [])
     is_gardien = any(p.lower() == 'gardien' for p in postes)
@@ -261,61 +260,40 @@ async def guest_login(credentials: GuestLogin):
 async def get_me(current_user: UserResponse = Depends(get_current_user)):
     return current_user
 
-# ============= GUEST CODE (Admin only) (MODIFIÉ) =============
-
-### MODIFIÉ ###
+# ============= GUEST CODE (Admin only) (Inchangé) =============
 async def generate_new_guest_code() -> GuestCode:
-    """
-    Génère un nouveau code de 6 caractères et calcule la date d'expiration
-    pour le prochain Lundi à 8h00 UTC.
-    """
     alphabet = string.ascii_uppercase + string.digits
     code = ''.join(secrets.choice(alphabet) for i in range(6))
-    
-    # Nouvelle logique d'expiration
     now = datetime.now(timezone.utc)
-    
-    # weekday() -> Lundi=0, Dimanche=6
     days_until_monday = (0 - now.weekday() + 7) % 7
-    
-    if days_until_monday == 0 and now.hour >= 8: # Si on est Lundi APRES 8h
-         days_until_monday = 7 # On vise Lundi prochain
-    elif days_until_monday == 0 and now.hour < 8: # Si on est Lundi AVANT 8h
-         days_until_monday = 0 # On vise Aujourd'hui 8h (le cron n'a pas encore tourné)
-
-    # Calcule la date
+    if days_until_monday == 0 and now.hour >= 8:
+         days_until_monday = 7
+    elif days_until_monday == 0 and now.hour < 8:
+         days_until_monday = 0
     if days_until_monday == 0:
         expires_at = now.replace(hour=8, minute=0, second=0, microsecond=0)
     else:
         expires_at = (now + timedelta(days=days_until_monday)).replace(hour=8, minute=0, second=0, microsecond=0)
-
     code_data = GuestCode(code=code, expires_at=expires_at)
-    
     await db.guest_codes.update_one(
         {"id": "singleton"},
         {"$set": {"code": code_data.code, "expires_at": code_data.expires_at.isoformat()}},
         upsert=True
     )
     return code_data
-
 async def get_or_create_guest_code() -> GuestCode:
     code_doc = await db.guest_codes.find_one({"id": "singleton"}, {"_id": 0})
-    
     if not code_doc or datetime.now(timezone.utc) > datetime.fromisoformat(code_doc["expires_at"]):
         return await generate_new_guest_code()
-        
     return GuestCode(code=code_doc["code"], expires_at=datetime.fromisoformat(code_doc["expires_at"]))
-
 @api_router.get("/admin/guest-code", response_model=GuestCode)
 async def get_guest_code(current_user: UserResponse = Depends(get_admin_user)):
     code = await get_or_create_guest_code()
     return code
-
 @api_router.post("/admin/guest-code", response_model=GuestCode)
 async def create_new_guest_code(current_user: UserResponse = Depends(get_admin_user)):
     code = await generate_new_guest_code()
     return code
-
 @api_router.get("/admin/guest-logs", response_model=List[GuestLogResponse])
 async def get_guest_logs(current_user: UserResponse = Depends(get_admin_user)):
     logs_cursor = db.guest_logs.find({}, {"_id": 0}).sort("logged_in_at", -1).limit(100)
@@ -325,20 +303,13 @@ async def get_guest_logs(current_user: UserResponse = Depends(get_admin_user)):
             log['logged_in_at'] = datetime.fromisoformat(log['logged_in_at'])
     return [GuestLogResponse(**log) for log in logs]
 
-
-# ============= CRON JOB ROUTE (Secret) (MODIFIÉ) =============
-
-### MODIFIÉ ###
+# ============= CRON JOB ROUTE (Secret) (Inchangé) =============
 @api_router.post("/cron/regenerate-code")
 async def cron_regenerate_code(secret: str = Body(..., embed=True)):
     if secret != CRON_SECRET:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
-    
     await generate_new_guest_code()
-    
-    # Renvoie un 204 No Content pour ne pas avoir de "sortie trop grande"
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
 
 # ============= PLAYERS ROUTES (Inchangé) =============
 @api_router.get("/players", response_model=List[PlayerInDB])
@@ -379,7 +350,7 @@ async def delete_player(player_id: str, current_user: UserResponse = Depends(get
         raise HTTPException(status_code=404, detail="Joueur non trouvé")
     return {"message": "Joueur supprimé avec succès"}
 
-# ============= EVENTS ROUTES (Inchangé - collaboratif) =============
+# ============= EVENTS ROUTES (Inchangé) =============
 @api_router.get("/events", response_model=List[Event])
 async def get_events(current_user: UserResponse = Depends(get_current_user)):
     query = {} 
@@ -423,24 +394,51 @@ async def delete_event(event_id: str, current_user: UserResponse = Depends(get_c
     await db.events.delete_one({"id": event_id})
     return {"message": "Événement supprimé avec succès"}
 
-# ============= TEAM GENERATION ALGORITHM (Inchangé) =============
+# ============= ### TEAM GENERATION (MODIFIÉ) ### =============
+
 async def get_player_details(joueur_ids: List[str]) -> Dict[str, PlayerInDB]:
     players = await db.players.find({"id": {"$in": joueur_ids}}, {"_id": 0}).to_list(1000)
     return {p["id"]: PlayerInDB(**p) for p in players}
+
+### MODIFIÉ: Calcule tous les scores moyens ###
 def calculate_team_stats(team: List[str], joueurs_map: Dict[str, PlayerInDB], notes_map: Dict[str, float]) -> Dict:
-    total_note = sum(notes_map.get(jid, 0) for jid in team)
-    note_moyenne = total_note / len(team) if team else 0
+    num_joueurs = len(team)
+    if num_joueurs == 0:
+        return {
+            "note_moyenne": 0, "avg_attaque": 0, "avg_milieu": 0, "avg_defense": 0,
+            "postes": {}, "total_note": 0
+        }
+
+    total_note = 0
+    total_attaque = 0
+    total_milieu = 0
+    total_defense = 0
     postes_count = {}
+
     for jid in team:
         player = joueurs_map.get(jid)
         if player:
+            # La note utilisée est celle du match (note_temporaire)
+            total_note += notes_map.get(jid, player.note_generale)
+            
+            # Calcul des sous-scores basés sur les attributs de base
+            total_attaque += (player.tir + player.technique) / 2
+            total_milieu += (player.passe + player.vitesse) / 2
+            total_defense += (player.defense + player.physique) / 2
+            
             for poste in player.postes:
                 postes_count[poste] = postes_count.get(poste, 0) + 1
+    
     return {
-        "note_moyenne": round(note_moyenne, 2),
+        "note_moyenne": round(total_note / num_joueurs, 2),
+        "avg_attaque": round(total_attaque / num_joueurs, 2),
+        "avg_milieu": round(total_milieu / num_joueurs, 2),
+        "avg_defense": round(total_defense / num_joueurs, 2),
         "postes": postes_count,
         "total_note": total_note
     }
+
+# (check_constraints est inchangé)
 def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffinite]) -> bool:
     for contrainte in contraintes:
         if contrainte.type == "lier":
@@ -455,17 +453,22 @@ def check_constraints(teams: List[List[str]], contraintes: List[ContrainteAffini
                 joueurs_in_team = [j for j in contrainte.joueurs if j in team]
                 if len(joueurs_in_team) > 1: return False
     return True
+
+### MODIFIÉ: La fonction de scoring utilise les nouveaux scores ###
 def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipes: int, 
                            contraintes: List[ContrainteAffinite], joueurs_map: Dict[str, PlayerInDB]) -> tuple:
     notes_map = {jp.joueur_id: jp.note_temporaire for jp in joueurs_presents}
     joueur_ids = list(notes_map.keys())
     n_joueurs = len(joueur_ids)
+    
     if n_joueurs < nombre_equipes:
         raise ValueError("Pas assez de joueurs pour former le nombre d'équipes demandé")
+    
     best_teams = None
     best_score = float('inf')
     warning_message = None
-    max_attempts = 1000
+    max_attempts = 2000 # Augmenté pour une recherche plus approfondie
+    
     for attempt in range(max_attempts):
         shuffled = joueur_ids.copy()
         random.shuffle(shuffled)
@@ -477,32 +480,44 @@ def generate_balanced_teams(joueurs_presents: List[JoueurPresent], nombre_equipe
             team_size = base_size + (1 if i < extra else 0)
             teams.append(shuffled[idx:idx + team_size])
             idx += team_size
+        
         if not check_constraints(teams, contraintes): continue
+        
         team_stats = [calculate_team_stats(team, joueurs_map, notes_map) for team in teams]
-        notes_moyennes = [stats["note_moyenne"] for stats in team_stats]
-        mean_of_means = sum(notes_moyennes) / len(notes_moyennes)
-        variance = sum((nm - mean_of_means) ** 2 for nm in notes_moyennes) / len(notes_moyennes)
-        note_score = variance
-        poste_score = 0
-        all_postes = set()
-        for stats in team_stats: all_postes.update(stats["postes"].keys())
-        for poste in all_postes:
-            poste_counts = [stats["postes"].get(poste, 0) for stats in team_stats]
-            if poste_counts:
-                mean_poste = sum(poste_counts) / len(poste_counts)
-                poste_variance = sum((pc - mean_poste) ** 2 for pc in poste_counts) / len(poste_counts)
-                poste_score += poste_variance
-        total_score = note_score * 2 + poste_score
+        
+        # Calculer la variance (déséquilibre) pour chaque métrique
+        def calculate_variance(scores: List[float]) -> float:
+            if not scores: return 0
+            mean = sum(scores) / len(scores)
+            return sum((s - mean) ** 2 for s in scores) / len(scores)
+
+        score_generale = calculate_variance([s["note_moyenne"] for s in team_stats])
+        score_attaque = calculate_variance([s["avg_attaque"] for s in team_stats])
+        score_milieu = calculate_variance([s["avg_milieu"] for s in team_stats])
+        score_defense = calculate_variance([s["avg_defense"] for s in team_stats])
+
+        # Score total pondéré: Le Général est le plus important (x3)
+        # Les sous-scores sont importants aussi (x2)
+        total_score = (score_generale * 3) + (score_attaque * 2) + (score_milieu * 2) + (score_defense * 2)
+        
         if total_score < best_score:
             best_score = total_score
             best_teams = teams
+            
+            # Vérifier si déséquilibre majeur (basé sur le Général)
+            notes_moyennes = [s["note_moyenne"] for s in team_stats]
             max_note = max(notes_moyennes)
             min_note = min(notes_moyennes)
             if max_note - min_note > 1.5:
-                warning_message = f"⚠️ Les contraintes d'affinité forcent un déséquilibre : écart de {max_note - min_note:.2f} points."
+                warning_message = f"⚠️ Les contraintes forcent un déséquilibre : écart de {max_note - min_note:.2f} points."
+            else:
+                warning_message = None # Réinitialiser le warning si on trouve un meilleur équilibre
+    
     if best_teams is None:
-        raise ValueError("Impossible de générer des équipes respectant toutes les contraintes")
+        raise ValueError("Impossible de générer des équipes respectant toutes les contraintes. Essayez moins de contraintes.")
+    
     return best_teams, warning_message
+
 @api_router.post("/events/{event_id}/generate", response_model=GenerateTeamsResponse)
 async def generate_teams(event_id: str, current_user: UserResponse = Depends(get_current_user)):
     event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
@@ -510,8 +525,10 @@ async def generate_teams(event_id: str, current_user: UserResponse = Depends(get
     event = Event(**event_doc)
     if not event.joueurs_presents:
         raise HTTPException(status_code=400, detail="Aucun joueur présent")
+    
     joueur_ids = [jp.joueur_id for jp in event.joueurs_presents]
     joueurs_map = await get_player_details(joueur_ids)
+    
     try:
         teams, warning = generate_balanced_teams(
             event.joueurs_presents,
@@ -546,7 +563,7 @@ async def generate_teams(event_id: str, current_user: UserResponse = Depends(get
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# ============= SHARE LINK (Inchangé) =============
+# ============= SHARE LINK (MODIFIÉ pour PlayerInDB) =============
 @api_router.get("/share/{share_token}")
 async def get_shared_event(share_token: str):
     event_doc = await db.events.find_one({"share_token": share_token}, {"_id": 0})
@@ -554,9 +571,11 @@ async def get_shared_event(share_token: str):
     event = Event(**event_doc)
     if not event.equipes_generees:
         raise HTTPException(status_code=400, detail="Les équipes n'ont pas encore été générées")
+    
     all_joueur_ids = [jp.joueur_id for jp in event.joueurs_presents]
     joueurs_map = await get_player_details(all_joueur_ids)
     notes_map = {jp.joueur_id: jp.note_temporaire for jp in event.joueurs_presents}
+    
     response_teams = []
     for team in event.equipes_generees:
         stats = calculate_team_stats(team, joueurs_map, notes_map)
@@ -584,7 +603,7 @@ async def get_shared_event(share_token: str):
 # ============= ROOT ROUTES =============
 @api_router.get("/")
 async def root():
-    return {"message": "API Générateur d'Équipes de Foot V5 (Collaboratif)"}
+    return {"message": "API Générateur d'Équipes de Foot V6 (Multi-Attributs)"}
 
 # Include router
 app.include_router(api_router)
