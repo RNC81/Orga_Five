@@ -28,9 +28,16 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '../components/ui/tooltip';
-import { Card, CardContent } from '../components/ui/card'; // On importe Card
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select'; // On importe Select
+import { Card, CardContent } from '../components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Trash2, Edit, ArrowLeft, User, Star, HelpCircle } from 'lucide-react';
+import { Plus, Trash2, Edit, ArrowLeft, User, Star, HelpCircle, SortAsc } from 'lucide-react'; // On importe SortAsc
 
 // État initial (inchangé)
 const emptyPlayerState = {
@@ -66,6 +73,9 @@ export default function PlayerPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingPlayerId, setEditingPlayerId] = useState(null);
   const [formState, setFormState] = useState(emptyPlayerState);
+  
+  // ### NOUVEL ÉTAT POUR LE TRI ###
+  const [sortCriteria, setSortCriteria] = useState('nom-asc'); // Par défaut : Nom (A-Z)
 
   const navigate = useNavigate();
 
@@ -88,12 +98,34 @@ export default function PlayerPage() {
     }
   };
 
+  // ### NOUVELLE LISTE TRIÉE ###
+  const sortedPlayers = useMemo(() => {
+    const sorted = [...players]; // Copie la liste
+    switch (sortCriteria) {
+      case 'nom-asc':
+        sorted.sort((a, b) => a.nom.localeCompare(b.nom));
+        break;
+      case 'nom-desc':
+        sorted.sort((a, b) => b.nom.localeCompare(a.nom));
+        break;
+      case 'note-desc':
+        sorted.sort((a, b) => b.note_generale - a.note_generale);
+        break;
+      case 'note-asc':
+        sorted.sort((a, b) => a.note_generale - b.note_generale);
+        break;
+      default:
+        break;
+    }
+    return sorted;
+  }, [players, sortCriteria]); // Se recalcule si 'players' ou 'sortCriteria' change
+
+  // (Fonctions de formulaire inchangées)
   const resetForm = () => {
     setFormState(emptyPlayerState);
     setEditingPlayerId(null);
     setIsFormOpen(false);
   };
-
   const handleOpenForm = (player) => {
     if (player) {
       setEditingPlayerId(player.id);
@@ -116,7 +148,6 @@ export default function PlayerPage() {
     }
     setIsFormOpen(true);
   };
-  
   const handleFormChange = (e) => {
     const { name, value, type } = e.target;
     setFormState(prev => ({
@@ -124,7 +155,6 @@ export default function PlayerPage() {
       [name]: type === 'number' ? parseFloat(value) : value
     }));
   };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     const postesArray = formState.postes.split(',').map(p => p.trim()).filter(Boolean);
@@ -147,7 +177,6 @@ export default function PlayerPage() {
       toast.error(error.response?.data?.detail || 'Une erreur est survenue.');
     }
   };
-
   const handleDelete = async (playerId) => {
     if (!window.confirm('Êtes-vous sûr de vouloir supprimer ce joueur ?')) return;
     try {
@@ -162,68 +191,86 @@ export default function PlayerPage() {
   return (
     <TooltipProvider>
     <div className="min-h-screen bg-gray-50">
-      {/* Header (inchangé) */}
+      {/* Header (MODIFIÉ) */}
       <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <Button variant="outline" size="icon" onClick={() => navigate('/dashboard')}>
               <ArrowLeft className="w-4 h-4" />
             </Button>
-            <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>
+            <h1 className="text-xl md:text-3xl font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif', color: '#1e293b' }}>
               Gérer les Joueurs
             </h1>
           </div>
-          <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => handleOpenForm(null)}>
-                <Plus className="w-5 h-5 mr-2" />
-                Ajouter un joueur
-              </Button>
-            </DialogTrigger>
-            {/* Dialog (inchangé, on garde la classe 'max-w-md md:max-w-3xl' de l'étape 15) */}
-            <DialogContent className="max-w-md md:max-w-3xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={() => resetForm()}>
-              <DialogHeader>
-                <DialogTitle>{editingPlayerId ? 'Modifier le joueur' : 'Ajouter un nouveau joueur'}</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSubmit} className="max-h-[80vh] overflow-y-auto pr-4">
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <AttributeInput name="nom" label="Nom du joueur" value={formState.nom} onChange={handleFormChange} placeholder="Ex: Zinedine Zidane" isText />
-                    <AttributeInput name="postes" label="Postes" value={formState.postes} onChange={handleFormChange} description="Ex: Milieu, Attaquant (séparés par une virgule)" placeholder="Gardien, Défenseur, Milieu, Attaquant" isText />
+          {/* ### MENU DE TRI AJOUTÉ ICI ### */}
+          <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2 w-full md:w-auto">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="sort" className="text-sm font-medium hidden sm:block">Trier par:</Label>
+              <Select value={sortCriteria} onValueChange={setSortCriteria}>
+                <SelectTrigger id="sort" className="w-full md:w-48">
+                  <SelectValue placeholder="Trier par..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="nom-asc">Nom (A-Z)</SelectItem>
+                  <SelectItem value="nom-desc">Nom (Z-A)</SelectItem>
+                  <SelectItem value="note-desc">Note (Décroissante)</SelectItem>
+                  <SelectItem value="note-asc">Note (Croissante)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
+              <DialogTrigger asChild>
+                <Button onClick={() => handleOpenForm(null)} className="w-full md:w-auto">
+                  <Plus className="w-5 h-5 mr-2" />
+                  Ajouter un joueur
+                </Button>
+              </DialogTrigger>
+              {/* Dialog (inchangé) */}
+              <DialogContent className="max-w-md md:max-w-3xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={() => resetForm()}>
+                <DialogHeader>
+                  <DialogTitle>{editingPlayerId ? 'Modifier le joueur' : 'Ajouter un nouveau joueur'}</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={handleSubmit} className="max-h-[80vh] overflow-y-auto pr-4">
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <AttributeInput name="nom" label="Nom du joueur" value={formState.nom} onChange={handleFormChange} placeholder="Ex: Zinedine Zidane" isText />
+                      <AttributeInput name="postes" label="Postes" value={formState.postes} onChange={handleFormChange} description="Ex: Milieu, Attaquant (séparés par une virgule)" placeholder="Gardien, Défenseur, Milieu, Attaquant" isText />
+                    </div>
+                    <h3 className="font-medium text-lg pt-2">Attributs de Joueur</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <AttributeInput name="vitesse" label="Vitesse" value={formState.vitesse} onChange={handleFormChange} description={attributeDescriptions.vitesse} />
+                      <AttributeInput name="technique" label="Technique" value={formState.technique} onChange={handleFormChange} description={attributeDescriptions.technique} />
+                      <AttributeInput name="tir" label="Tir" value={formState.tir} onChange={handleFormChange} description={attributeDescriptions.tir} />
+                      <AttributeInput name="passe" label="Passe" value={formState.passe} onChange={handleFormChange} description={attributeDescriptions.passe} />
+                      <AttributeInput name="defense" label="Défense" value={formState.defense} onChange={handleFormChange} description={attributeDescriptions.defense} />
+                      <AttributeInput name="physique" label="Physique" value={formState.physique} onChange={handleFormChange} description={attributeDescriptions.physique} />
+                    </div>
+                    {isGardien && (
+                      <>
+                        <h3 className="font-medium text-lg pt-2 text-blue-600">Attributs de Gardien</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-blue-50 rounded-lg">
+                          <AttributeInput name="reflexes_gk" label="Réflexes (GK)" value={formState.reflexes_gk} onChange={handleFormChange} description={attributeDescriptions.reflexes_gk} />
+                          <AttributeInput name="plongeon_gk" label="Plongeon (GK)" value={formState.plongeon_gk} onChange={handleFormChange} description={attributeDescriptions.plongeon_gk} />
+                          <AttributeInput name="jeu_au_pied_gk" label="Jeu au Pied (GK)" value={formState.jeu_au_pied_gk} onChange={handleFormChange} description={attributeDescriptions.jeu_au_pied_gk} />
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <h3 className="font-medium text-lg pt-2">Attributs de Joueur</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <AttributeInput name="vitesse" label="Vitesse" value={formState.vitesse} onChange={handleFormChange} description={attributeDescriptions.vitesse} />
-                    <AttributeInput name="technique" label="Technique" value={formState.technique} onChange={handleFormChange} description={attributeDescriptions.technique} />
-                    <AttributeInput name="tir" label="Tir" value={formState.tir} onChange={handleFormChange} description={attributeDescriptions.tir} />
-                    <AttributeInput name="passe" label="Passe" value={formState.passe} onChange={handleFormChange} description={attributeDescriptions.passe} />
-                    <AttributeInput name="defense" label="Défense" value={formState.defense} onChange={handleFormChange} description={attributeDescriptions.defense} />
-                    <AttributeInput name="physique" label="Physique" value={formState.physique} onChange={handleFormChange} description={attributeDescriptions.physique} />
-                  </div>
-                  {isGardien && (
-                    <>
-                      <h3 className="font-medium text-lg pt-2 text-blue-600">Attributs de Gardien</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-blue-50 rounded-lg">
-                        <AttributeInput name="reflexes_gk" label="Réflexes (GK)" value={formState.reflexes_gk} onChange={handleFormChange} description={attributeDescriptions.reflexes_gk} />
-                        <AttributeInput name="plongeon_gk" label="Plongeon (GK)" value={formState.plongeon_gk} onChange={handleFormChange} description={attributeDescriptions.plongeon_gk} />
-                        <AttributeInput name="jeu_au_pied_gk" label="Jeu au Pied (GK)" value={formState.jeu_au_pied_gk} onChange={handleFormChange} description={attributeDescriptions.jeu_au_pied_gk} />
-                      </div>
-                    </>
-                  )}
-                </div>
-                <DialogFooter className="pt-6 sticky bottom-0 bg-white">
-                  <DialogClose asChild>
-                    <Button type="button" variant="outline" onClick={resetForm}>Annuler</Button>
-                  </DialogClose>
-                  <Button type="submit">{editingPlayerId ? 'Mettre à jour' : 'Créer'}</Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
+                  <DialogFooter className="pt-6 sticky bottom-0 bg-white">
+                    <DialogClose asChild>
+                      <Button type="button" variant="outline" onClick={resetForm}>Annuler</Button>
+                    </DialogClose>
+                    <Button type="submit">{editingPlayerId ? 'Mettre à jour' : 'Créer'}</Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
       </header>
 
-      {/* Main Content (Table des joueurs) */}
+      {/* Main Content (MODIFIÉ pour utiliser 'sortedPlayers') */}
       <main className="max-w-7xl mx-auto px-4 py-8">
         {loading ? (
           <p>Chargement des joueurs...</p>
@@ -240,10 +287,9 @@ export default function PlayerPage() {
         ) : (
           <div className="bg-white rounded-lg shadow">
             
-            {/* ### NOUVEAU : VUE MOBILE (Cartes) ### */}
-            {/* `md:hidden` = visible sur mobile, caché sur desktop */}
+            {/* VUE MOBILE (Cartes) - utilise 'sortedPlayers' */}
             <div className="md:hidden space-y-3 p-3">
-              {players.map((player) => (
+              {sortedPlayers.map((player) => (
                 <Card key={player.id} className="p-4">
                   <CardContent className="p-0">
                     <div className="flex justify-between items-center mb-2">
@@ -271,8 +317,7 @@ export default function PlayerPage() {
               ))}
             </div>
             
-            {/* ### NOUVEAU : VUE DESKTOP (Tableau) ### */}
-            {/* `hidden md:block` = caché sur mobile, visible sur desktop */}
+            {/* VUE DESKTOP (Tableau) - utilise 'sortedPlayers' */}
             <div className="hidden md:block">
               <Table>
                 <TableHeader>
@@ -284,7 +329,7 @@ export default function PlayerPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {players.map((player) => (
+                  {sortedPlayers.map((player) => (
                     <TableRow key={player.id}>
                       <TableCell className="font-medium">{player.nom}</TableCell>
                       <TableCell>
@@ -313,7 +358,6 @@ export default function PlayerPage() {
                 </TableBody>
               </Table>
             </div>
-            {/* ### FIN DES MODIFICATIONS ### */}
             
           </div>
         )}
